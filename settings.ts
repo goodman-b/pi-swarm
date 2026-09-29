@@ -27,7 +27,9 @@ export const DEFAULTS = {
 };
 export type Settings = typeof DEFAULTS;
 const ranges = {
-  defaultAgents: [2, 16], maxAgents: [2, 16], peerMaxTurns: [1, 500], maxConcurrent: [1, 16],
+  // No hardcoded ceiling on peer/concurrency counts (issue #5): any safe integer at or
+  // above the floor. High counts are configurable, not a verified scale guarantee.
+  defaultAgents: [2, Number.MAX_SAFE_INTEGER], maxAgents: [2, Number.MAX_SAFE_INTEGER], peerMaxTurns: [1, 500], maxConcurrent: [1, Number.MAX_SAFE_INTEGER],
   harvestMaxTurns: [1, 100], reduceMaxTurns: [1, 100], graceTurns: [0, 10], wallSeconds: [10, 14400], refreshMs: [250, 60000],
   runTokenCap: [0, 100_000_000],
 } as const;

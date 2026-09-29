@@ -174,7 +174,7 @@ to save** until fixed. `SWARM_SETTINGS_PATH` overrides the path.
 
 | Key | Default |
 |---|---|
-| `defaultAgents` / `maxAgents` | 4 / 16 |
+| `defaultAgents` / `maxAgents` | 4 / 16 — roster size vs. per-launch ceiling; no hard cap, any safe integer ≥ 2 |
 | `defaultModel` / `defaultEffort` | *(the calling session's model)* / low |
 | `peerMaxTurns` / `harvestMaxTurns` / `reduceMaxTurns` / `graceTurns` | 80 / 30 / 30 / 3 |
 | `maxConcurrent` | 8 — peer sessions prompting at once; the rest queue |
@@ -187,6 +187,13 @@ to save** until fixed. `SWARM_SETTINGS_PATH` overrides the path.
 | `defaultTools` | `[]` (grant names, validated against your `grants` registry; an unknown name refuses the whole list) |
 | `grants` | `{}` — the grant registry. **Fail closed:** an absent, null or unparseable block resets it, so a revoked grant cannot survive into a later run |
 | `sandbox` | `auto` (`off` refuses `apply`; granted/inherited tools run unboxed either way, with a warning) |
+
+`defaultAgents` is the default roster; `maxAgents` is the operator's per-run
+ceiling; `maxConcurrent` limits simultaneous peer prompts. Roster settings
+accept safe integers ≥ 2; concurrency accepts safe integers ≥ 1. There is no
+fixed 16-peer ceiling. Tune these to your provider's rate limits, latency,
+context size and budget, and size `wallSeconds` for queued peers. Higher counts
+are configurable, **not a verified scalability guarantee**.
 
 All run paths are `<boardRoot>/<operator-session>/<run>/`. `run.json` is
 authoritative runtime state.

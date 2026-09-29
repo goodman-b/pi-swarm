@@ -63,6 +63,26 @@ async function success(spec: SpawnSpec, fake: any) {
 try {
   const cfg = parseSettings({ maxAgents: 3, defaultAgents: 8, peerMaxTurns: 0, boardRoot: 'relative', defaultEffort: 'bogus' });
   ok(cfg.defaultAgents === 3 && cfg.peerMaxTurns === 80 && cfg.boardRoot === DEFAULTS.boardRoot, 'settings validate and clamp width');
+  // issue #5: no hardcoded 16 ceiling - high but safe counts are accepted, defaults unchanged
+  ok(DEFAULTS.defaultAgents === 4 && DEFAULTS.maxAgents === 16 && DEFAULTS.maxConcurrent === 8, 'defaults remain 4/16/8');
+  const wide = parseSettings({ defaultAgents: 64, maxAgents: 64, maxConcurrent: 32 });
+  ok(wide.defaultAgents === 64 && wide.maxAgents === 64 && wide.maxConcurrent === 32, 'settings accept 64 peers / 32 concurrent');
+  const big = parseSettings({ maxAgents: Number.MAX_SAFE_INTEGER, maxConcurrent: Number.MAX_SAFE_INTEGER });
+  ok(big.maxAgents === Number.MAX_SAFE_INTEGER && big.maxConcurrent === Number.MAX_SAFE_INTEGER, 'settings accept MAX_SAFE_INTEGER bounds');
+  for (const bad of [2 ** 53, -1, 1.5, '16', null, 0]) {
+    for (const key of ['defaultAgents', 'maxAgents', 'maxConcurrent'] as const) {
+      const c = parseSettings({ [key]: bad });
+      ok(c[key] === DEFAULTS[key], `${key}=${String(bad)} falls back to default ${DEFAULTS[key]}`);
+    }
+  }
+  // floors differ per key: 1 is a valid maxConcurrent, invalid for the roster keys
+  ok(parseSettings({ maxConcurrent: 1 }).maxConcurrent === 1, 'maxConcurrent accepts its floor 1');
+  for (const bad of [1, 0]) { const c = parseSettings({ defaultAgents: bad, maxAgents: bad });
+    ok(c.defaultAgents === 4 && c.maxAgents === 16, `${String(bad)} is below the roster floor and falls back`); }
+  // configured limit is enforced at launch: default maxAgents 2 rejects 3; raised cap admits it
+  assert.throws(() => validateLaunch({ ...launch, agents: 3 }, { ...s, maxAgents: 2 }), undefined, 'configured maxAgents 2 rejects agents 3');
+  ok(validateLaunch({ ...launch, agents: 2 }, { ...s, maxAgents: 64 }) === undefined, 'raised maxAgents 64 admits a valid launch');
+  for (const n of [2 ** 53, 1.5, -3]) assert.throws(() => validateLaunch({ ...launch, agents: n }, s)); checks++;
   for (const invalid of [{ goal: '' }, { agents: 17 }, { runId: '../escape' }, { apply: true }, { effort: 'wat' }, { slices: [42] }, { reduceGate: 'true' }]) {
     assert.throws(() => validateLaunch({ ...launch, ...invalid } as any, s)); checks++;
   }
@@ -403,6 +423,8 @@ try {
   const tools: any[] = [], handlers: any = {}, commands: any[] = [];
   extension({ registerTool(t: any) { tools.push(t); }, registerCommand(n: string) { commands.push(n); }, on(n: string, fn: any) { handlers[n] = fn; } } as any);
   ok(tools.map(t => t.name).join(',') === 'swarm_start,swarm_status,swarm_steer,swarm_cancel', 'standalone registration without subagent extension');
+  ok(tools.find((t: any) => t.name === 'swarm_start').parameters.properties.agents.maximum === Number.MAX_SAFE_INTEGER,
+    'swarm_start agents schema ceiling matches the settings ceiling');
   ok(commands.includes('swarm'), '/swarm registered');
   await handlers.session_shutdown();
   ok((await runGate('printf pass', root, new AbortController().signal)) === 'pass', 'gate executes locally');
