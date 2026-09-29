@@ -81,8 +81,11 @@ try {
     ok(c.defaultAgents === 4 && c.maxAgents === 16, `${String(bad)} is below the roster floor and falls back`); }
   // configured limit is enforced at launch: default maxAgents 2 rejects 3; raised cap admits it
   assert.throws(() => validateLaunch({ ...launch, agents: 3 }, { ...s, maxAgents: 2 }), undefined, 'configured maxAgents 2 rejects agents 3');
-  ok(validateLaunch({ ...launch, agents: 2 }, { ...s, maxAgents: 64 }) === undefined, 'raised maxAgents 64 admits a valid launch');
-  for (const n of [2 ** 53, 1.5, -3]) assert.throws(() => validateLaunch({ ...launch, agents: n }, s)); checks++;
+  ok(validateLaunch({ ...launch, agents: 64 }, { ...s, maxAgents: 64 }) === undefined, 'raised maxAgents 64 admits a 64-peer launch');
+  assert.throws(() => validateLaunch({ ...launch, agents: 65 }, { ...s, maxAgents: 64 })); checks++;
+  for (const n of [2 ** 53, 1.5, -3]) {
+    assert.throws(() => validateLaunch({ ...launch, agents: n }, { ...s, maxAgents: Number.MAX_VALUE })); checks++;
+  }
   for (const invalid of [{ goal: '' }, { agents: 17 }, { runId: '../escape' }, { apply: true }, { effort: 'wat' }, { slices: [42] }, { reduceGate: 'true' }]) {
     assert.throws(() => validateLaunch({ ...launch, ...invalid } as any, s)); checks++;
   }
