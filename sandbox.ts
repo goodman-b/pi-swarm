@@ -33,7 +33,7 @@ export function wrap(cmd: string[], o: { cwd: string; lib64?: boolean; lockdown?
 }
 
 export type Exec = (argv: string[], options?: { timeout?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
-export interface Preflight { available: boolean; smokeOk: boolean; overlayOk: boolean; lockdown?: boolean; reason?: string }
+export interface Preflight { available: boolean; smokeOk: boolean; overlayOk: boolean; lockdown?: boolean; reason?: string; toolsWarning?: string }
 
 const isWhiteoutName = (n: string) => n.startsWith('.wh.') && n !== '.wh..wh..opq';
 /** char-dev 0:0 IS the kernel's whiteout; mknod is the only way to make one, and the copy is
@@ -89,13 +89,49 @@ async function smoke(exec: Exec, lockdown: boolean) {
   return exec(wrap(['/bin/true'], { cwd: '/', lockdown }), { timeout: 15000 });
 }
 
+// pi resolves its grep helper `rg` from pi's own bin dir before PATH (getBinDir/getToolPath), so
+// a host whose PATH lacks rg still has a working grep tool - probing PATH alone would falsely
+// reject the bundled binary. Mirror that order: bin dir, then PATH. Inside the box neither exists
+// (wrap() mounts /usr and the workspace only), which is how a healthy box can still hide rg.
+const TOOL_PROBE = 'for t in rg python3; do [ -x "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin/$t" ] || command -v "$t" >/dev/null 2>&1 || echo MISSING:$t; done';
+// What a missing tool costs depends on which environment it is missing from: peer tool calls
+// (grep/find/ls/read) resolve on the host in EVERY mode; only a staged run routes shell
+// commands through the box. Saying "grep will fail" about a box-only gap would be false.
+const NOTES: Record<string, { host: string; box: string }> = {
+  rg: { host: 'rg unavailable - the grep tool will fail', box: 'rg unavailable to sandboxed shell commands' },
+  python3: { host: 'python3 unavailable - the board and xattr helpers need it', box: 'python3 unavailable to sandboxed shell commands' },
+};
+async function probeTools(exec: Exec, boxed: boolean, lockdown: boolean, cwd: string) {
+  // Probe with a real dir as cwd, never '/': wrap() ro-binds its cwd, so cwd:'/' would mount the
+  // whole host read-only and hide the very missing mount this probe exists to find. The mounts the
+  // probe cares about (which are absent) do not depend on the choice, so callers pass probeRoot.
+  const argv = boxed ? wrap(['/bin/sh', '-c', TOOL_PROBE], { cwd, lockdown }) : ['/bin/sh', '-c', TOOL_PROBE];
+  let r; try { r = await exec(argv, { timeout: 8000 }); }
+  catch { return undefined; }   // probe itself failed: say nothing rather than claim a tool is missing
+  const missing = String(r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => l.startsWith('MISSING:')).map(l => l.slice(8));
+  if (!missing.length) return undefined;
+  return `probed ${boxed ? 'inside the bwrap box' : 'on the host (pi bin dir + PATH)'}: ` +
+    missing.map(t => (NOTES[t] ?? { host: `${t} unavailable`, box: `${t} unavailable to sandboxed shell commands` })[boxed ? 'box' : 'host']).join(', ');
+}
+
+/** Box preflight plus a tool probe in each environment that can actually be used: the host (peer
+ * tool calls, every mode) and - only for a staged run, which is the only case where shell commands
+ * execute inside the box - the box itself. Only a staged run has a boxed shell, so `boxed` is
+ * opt-in: a box-less caller must not probe a box that will never run a command. */
+export async function preflight(exec: Exec, probeRoot: string = tmpdir(), boxed = false): Promise<Preflight> {
+  const pf = await boxPreflight(exec, probeRoot);
+  pf.toolsWarning = [(await probeTools(exec, false, pf.lockdown !== false, probeRoot)),
+    ...(boxed && pf.smokeOk ? [await probeTools(exec, true, pf.lockdown !== false, probeRoot)] : [])].filter(Boolean).join('; ') || undefined;
+  return pf;
+}
+
 /**
  * bwrap preflight through an injectable exec: version, wrapped /bin/true, then a
  * tmp-overlay probe. Overlay is probeable unprivileged only via --tmp-overlay
  * (same kernel userns-overlay path a persistent upper needs); if that is denied
  * we report overlayOk:false with the reason instead of guessing.
  */
-export async function preflight(exec: Exec, probeRoot: string = tmpdir()): Promise<Preflight> {
+async function boxPreflight(exec: Exec, probeRoot: string = tmpdir()): Promise<Preflight> {
   const none: Preflight = { available: false, smokeOk: false, overlayOk: false };
   let v;
   try { v = await exec(['bwrap', '--version'], { timeout: 5000 }); }

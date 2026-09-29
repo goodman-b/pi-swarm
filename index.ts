@@ -56,10 +56,12 @@ export default function swarm(pi: ExtensionAPI) {
     try { // launching must clear on every exit path; engine.run covers the guard afterwards
     const current = generation;
     let parent: ParentInventory | undefined;
+    // Probe tools where THEY RUN: peers/harvest resolve rg (pi's grep helper) in-process on the
+    // host PATH; only a staged apply run puts a shell inside the box. sandbox:'off' means host.
     const pf = await preflight(async argv => {
       const r = await (pi as any).exec?.(argv[0], argv.slice(1), { timeout: 20000 });
       return { code: r.code, stdout: r.stdout, stderr: r.stderr };
-    }, settings.boardRoot);   // probe the filesystem the writer will actually use, not $TMPDIR
+    }, settings.boardRoot, settings.sandbox !== 'off' && a.apply === true);   // probe the filesystem the writer will actually use, not $TMPDIR
     if (closing || current !== generation) throw new Error('Session changed during launch');
     // Resolve the frozen capability selection from the parent inventory before any session exists.
     const toolkit = a.toolkit ?? settings.defaultToolkit;

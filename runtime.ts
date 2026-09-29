@@ -206,6 +206,13 @@ export class SwarmRuntime {
       }
       if (needSandbox) run.sandbox = { requested: settings.sandbox, available: true, lockdown: pf.lockdown !== false, scope: 'reduce+gate',
         ...(pf.lockdown === false ? { warning: 'nested-userns lockdown unavailable; sandbox is weaker' } : {}) };
+      // Tool availability is a separate fact from box health: a healthy box can still hide a tool
+      // pi resolves from outside its mounts (rg from ~/.pi/agent/bin). WARNING only, never a
+      // blocker - a run without rg still has read/find/ls/bash.
+      if (pf.toolsWarning) {
+        const sb = run.sandbox ?? { requested: settings.sandbox, available: settings.sandbox !== 'off' && pf.smokeOk === true };
+        run.sandbox = { ...sb, warning: [sb.warning, pf.toolsWarning].filter(Boolean).join('; ') };
+      }
     } catch (e: any) {
       rmSync(board.dir, { recursive: true, force: true });
       this.run = undefined;
