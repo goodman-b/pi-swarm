@@ -25,8 +25,11 @@ Review and merge through a pull request after checks pass.
 3. Merge after review and green CI. From a clean checkout of that exact
    `main` commit, verify the version and create the matching annotated tag
    (`vX.Y.Z`). Push the tag to GitHub.
-4. Publish that same checkout with `npm publish --access public`, completing
-   npm's interactive authentication. No credentials belong in the repo or CI.
+4. Publishing then happens on the GitHub release, via
+   `.github/workflows/publish.yml`, once a trusted publisher is registered
+   (below). Without one, publish that same checkout with
+   `npm publish --access public`, completing npm's interactive authentication.
+   No credentials belong in the repo or CI either way.
 5. Verify `npm view @goodman-b/pi-swarm@X.Y.Z version dist.integrity` and
    the npm/Pi catalog pages. Create GitHub release notes from the changelog.
 6. Upgrade a canary first, then other consumers deliberately. Pinned installs
@@ -38,5 +41,14 @@ updates. npm 0.4.0 was published from `4d2b1ef`; runtime source is unchanged.
 Keep that historical tag intact. Future tags and npm publications must use
 exactly the same source commit.
 
-npm trusted publishing can replace interactive publication later; no release
-automation or publishing credentials are configured by this workflow.
+## One-time npm trusted publishing setup
+
+Publishing needs no stored token: GitHub Actions exchanges a short-lived OIDC
+token. Register the workflow once, with npm ≥ 11.15 and 2FA on the account
+(`npm install -g npm@^11.15.0` first):
+
+    npm trust github @goodman-b/pi-swarm --file publish.yml --repo goodman-b/pi-swarm --allow-publish
+
+Check with `npm trust list @goodman-b/pi-swarm`; one relationship per package,
+revoke and recreate to change it. Until registered, the Publish workflow fails
+at `npm publish` - publish by hand instead.

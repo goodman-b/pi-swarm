@@ -1,0 +1,29 @@
+name: Publish
+# Publishes the exact commit a GitHub release points at. Requires a trusted
+# publisher on npm (see CONTRIBUTING.md); until that exists this job fails at
+# `npm publish` with an auth error, which is the intended loud signal.
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: npm install --global @earendil-works/pi-coding-agent@0.87.1
+      - run: npm install --global npm@^11.15.0
+      - run: npm test
+      # the tag must carry the version it publishes - a mismatched tag is a mis-release
+      - run: test "$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME#v}"
+      - run: npm publish --access public --provenance
