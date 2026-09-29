@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Board, atomicJson, component } from './board.ts';
-import { EFFORTS, type Settings } from './settings.ts';
+import { EFFORTS, MAX_PEERS, type Settings } from './settings.ts';
 import { resolveToolkit, toolkitPrompt, TOOLKITS, type ResolvedToolkit, type Toolkit, type ParentInventory } from './capabilities.ts';
 import type { Preflight } from './sandbox.ts';
 
@@ -104,7 +104,7 @@ export function validateLaunch(a: Launch, s: Settings): void {
   text(a.goal, 'goal'); text(a.done, 'done');
   if (a.runId !== undefined) component(a.runId);
   const n = a.agents ?? s.defaultAgents;
-  if (!Number.isInteger(n) || n < 2 || n > s.maxAgents) throw new Error(`agents must be 2–${s.maxAgents}`);
+  if (!Number.isInteger(n) || n < 2 || n > MAX_PEERS || n > s.maxAgents) throw new Error(`agents must be 2–${s.maxAgents}`);
   if (a.effort !== undefined && !EFFORTS.includes(a.effort)) throw new Error('Invalid effort');
   if (a.model !== undefined) text(a.model, 'model', 200);
   if (a.slices !== undefined && (!Array.isArray(a.slices) || a.slices.length > 100 || a.slices.some(x => typeof x !== 'string' || !x.trim() || x.length > 300))) throw new Error('Invalid candidate slices');

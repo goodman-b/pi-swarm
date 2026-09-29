@@ -7,7 +7,7 @@ import { grantList, parentInventory, resolveToolkit, excludeSelf, type ParentInv
 import { preflight } from './sandbox.ts';
 import { component } from './board.ts';
 import { swarmCommand } from './commands.ts';
-import { loadSettings, saveSettings, drainDiagnostics, settingsPath } from './settings.ts';
+import { loadSettings, saveSettings, drainDiagnostics, settingsPath, MAX_PEERS } from './settings.ts';
 import { SwarmRuntime, validateLaunch, type Launch, type Run } from './runtime.ts';
 import { prepareSDK, runGate } from './sdk.ts';
 import { displayRun, type DisplayRun } from './history.ts';
@@ -85,7 +85,7 @@ export default function swarm(pi: ExtensionAPI) {
     description: 'Start the standalone self-organising peer swarm. Use only when the user requests a swarm. Peers choose and claim work, challenge findings, and an independent harvest verifies results. Peers are this package\'s own SDK sessions, not delegated subagents or role profiles. Background; completion is notified. Read-only by default (no shell/network). toolkit grants opt in named read-only capabilities declared in the `grants` setting (the registry ships empty); inherit mirrors the parent session\'s tool set minus delegation tools. apply=true explicitly enables a single staged writer and requires a working bwrap sandbox plus a shell verification gate; a failing gate discards all staged changes. Never enable apply without user authorization. Peers choose the work: do not pre-split fixed lanes when discovery is the point. Give a measurable definition of done, not a quota. A read-only run means source inspection only - state that limitation rather than swapping in unrestricted subagents. Peers beyond maxConcurrent queue against one shared wall clock, so size the roster and the deadline together; hitting either limit stops the peers but the harvest still reports what was found.',
     parameters: Type.Object({
       goal: Type.String({ minLength: 1, maxLength: 32000 }), done: Type.String({ minLength: 1, maxLength: 32000 }),
-      agents: Type.Optional(Type.Integer({ minimum: 2, maximum: 16 })), model: Type.Optional(Type.String()),
+      agents: Type.Optional(Type.Integer({ minimum: 2, maximum: MAX_PEERS })), model: Type.Optional(Type.String()),
       effort: Type.Optional(Type.String()), runId: Type.Optional(Type.String()),
       slices: Type.Optional(Type.Array(Type.String(), { maxItems: 100 })),
       apply: Type.Optional(Type.Boolean()), reduceGate: Type.Optional(Type.String()),

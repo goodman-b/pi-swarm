@@ -174,7 +174,7 @@ to save** until fixed. `SWARM_SETTINGS_PATH` overrides the path.
 
 | Key | Default |
 |---|---|
-| `defaultAgents` / `maxAgents` | 4 / 16 |
+| `defaultAgents` / `maxAgents` | 4 / 16 — roster size vs. per-launch ceiling; no fixed 16 limit, accepted up to the roster's structural array-length maximum (2^32−1) |
 | `defaultModel` / `defaultEffort` | *(the calling session's model)* / low |
 | `peerMaxTurns` / `harvestMaxTurns` / `reduceMaxTurns` / `graceTurns` | 80 / 30 / 30 / 3 |
 | `maxConcurrent` | 8 — peer sessions prompting at once; the rest queue |
@@ -187,6 +187,16 @@ to save** until fixed. `SWARM_SETTINGS_PATH` overrides the path.
 | `defaultTools` | `[]` (grant names, validated against your `grants` registry; an unknown name refuses the whole list) |
 | `grants` | `{}` — the grant registry. **Fail closed:** an absent, null or unparseable block resets it, so a revoked grant cannot survive into a later run |
 | `sandbox` | `auto` (`off` refuses `apply`; granted/inherited tools run unboxed either way, with a warning) |
+
+`defaultAgents` is the default roster; `maxAgents` is the operator's per-run
+ceiling; `maxConcurrent` limits simultaneous peer prompts. There is no fixed
+16-peer limit: roster settings accept integers ≥ 2 up to the structural array
+length maximum (2^32−1, the largest JS array the peer roster can be); the
+operator must keep counts practical — the roster is allocated upfront, so huge
+values are a memory cost, not a scalability guarantee. Concurrency settings
+accept safe integers ≥ 1; queueing is a limit on parallel prompts, not a memory
+bound. Tune these to your provider's rate limits, latency, context size and
+budget, and size `wallSeconds` for queued peers.
 
 All run paths are `<boardRoot>/<operator-session>/<run>/`. `run.json` is
 authoritative runtime state.
