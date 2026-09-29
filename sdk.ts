@@ -258,13 +258,17 @@ export async function runGate(command: string, cwd: string, signal: AbortSignal,
   const gateStaging = staging && view ? { ...staging, dir: normaliseWhiteouts(staging.dir, view) } : staging;
   try {
     // Reuse Pi's bounded output and process-tree cancellation, not a shell
-    // subprocess whose grandchildren survive timeout/abort. The bash tool REJECTS on both
-    // non-zero exit and timeout, so both discard staging (verified, not assumed).
+    // subprocess whose grandchildren survive timeout/abort. The bash tool REJECTS on timeout
+    // but NOT on non-zero exit: it resolves with isError:true and the failure text. Without the
+    // guard below a failing gate reads as a pass and promote() writes the staged tree over the
+    // workspace. (Measured: runGate('false') resolves with "Command exited with code 1".)
     const tool = gateStaging
       ? createBashTool(cwd, { operations: { exec: (cmd, _cwd, opts) => localBash.exec(sandboxArgv(cmd, cwd, gateStaging, true), _cwd, opts) } })
       : createBashTool(cwd);
     const r = await tool.execute('swarm-gate', { command: 'set -o pipefail\n' + command, timeout: 120 }, signal);
-    return r.content.filter(x => x.type === 'text').map(x => x.text).join('\n');
+    const out = r.content.filter(x => x.type === 'text').map(x => x.text).join('\n');
+    if (r.isError) throw new Error(out);   // non-zero exit: the catch below discards staging
+    return out;
   } catch (e: any) {
     // An operator cancel mid-gate is a different event from a failing gate. Both discard
     // staging and leave the workspace untouched, but reporting a cancel as "Reduce gate
