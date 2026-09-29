@@ -294,15 +294,24 @@ try {
     'the harvest is given a fresh wall after the peer wall fires - a report that outlasts the peers still lands, and keeps its verdict');
   // A cancel is intent, not a budget, so it skips the harvest - but it must not skip the
   // board. This is the loss a session /reload used to cause mid-audit.
+  let evidencePosted!: () => void;
+  const evidenceReady = new Promise<void>(resolve => { evidencePosted = resolve; });
   const cancelled = new SwarmRuntime(creator(async (spec, fake) => {
     if (spec.mode === 'peer') {
-      if (!fake.held) { fake.held = true; await spec.board('post', 'partial finding: index.ts:1 returns stale rows', 'findings'); }
+      if (!fake.held) { fake.held = true; await spec.board('post', 'partial finding: index.ts:1 returns stale rows', 'findings'); evidencePosted(); }
       while (!fake.aborted) await new Promise(r => setTimeout(r, 5));
     } else await success(spec, fake);
   }), async () => '');
   cancelled.start({ ...launch, runId: 'cancel-dump' }, { ...s, peerMaxTurns: 500, graceTurns: 0 }, 'session', root);
-  await new Promise(r => setTimeout(r, 150));
-  await cancelled.close();
+  let evidenceTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([evidenceReady, new Promise<never>((_, reject) => {
+      evidenceTimeout = setTimeout(() => reject(new Error('cancel test: evidence was not posted')), 10000);
+    })]);
+  } finally {
+    clearTimeout(evidenceTimeout);
+    await cancelled.close();
+  }
   ok(cancelled.run!.state === 'aborted'
     && readFileSync(cancelled.run!.report!, 'utf8').includes('partial finding: index.ts:1')
     // boardDigest() replaced the bare placeholder with a sentence that reproduces the board;
