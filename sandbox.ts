@@ -116,8 +116,9 @@ async function probeTools(exec: Exec, boxed: boolean, lockdown: boolean, cwd: st
 
 /** Box preflight plus a tool probe in each environment that can actually be used: the host (peer
  * tool calls, every mode) and - only for a staged run, which is the only case where shell commands
- * execute inside the box - the box itself. `boxed` must be false when the sandbox is off. */
-export async function preflight(exec: Exec, probeRoot: string = tmpdir(), boxed = true): Promise<Preflight> {
+ * execute inside the box - the box itself. Only a staged run has a boxed shell, so `boxed` is
+ * opt-in: a box-less caller must not probe a box that will never run a command. */
+export async function preflight(exec: Exec, probeRoot: string = tmpdir(), boxed = false): Promise<Preflight> {
   const pf = await boxPreflight(exec, probeRoot);
   pf.toolsWarning = [(await probeTools(exec, false, pf.lockdown !== false, probeRoot)),
     ...(boxed && pf.smokeOk ? [await probeTools(exec, true, pf.lockdown !== false, probeRoot)] : [])].filter(Boolean).join('; ') || undefined;

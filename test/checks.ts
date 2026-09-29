@@ -533,6 +533,13 @@ try {
   ok(/rg unavailable to sandboxed shell commands/.test(pfBoxOnly.toolsWarning ?? '') &&
     !/grep tool will fail/.test(pfBoxOnly.toolsWarning ?? '') && !/probed on the host/.test(pfBoxOnly.toolsWarning ?? ''),
     'preflight: box-only rg gap is scoped to sandboxed shell commands, no host claim');
+  // the box probe is gated on a healthy box: a run whose smoke failed has no boxed shell to probe
+  probeSeen.length = 0;
+  await preflight(async (a) => { probeSeen.push(a); return a.includes('--version')
+    ? { code: 0, stdout: 'v', stderr: '' } : { code: 1, stdout: '', stderr: 'userns denied' }; }, root, true);
+  ok(probeSeen.some(a => a.join(' ').includes('command -v') && a[0] === '/bin/sh') &&
+    !probeSeen.some(a => a.join(' ').includes('command -v') && a[0] === 'bwrap'),
+    'preflight: a failed box smoke skips the box probe but still probes the host');
   probeSeen.length = 0;
   const pfHost = await preflight(pfFake('MISSING:rg\nMISSING:python3'), root, false);
   ok(/rg unavailable/.test(pfHost.toolsWarning ?? '') && /python3 unavailable/.test(pfHost.toolsWarning ?? '') &&
