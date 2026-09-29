@@ -509,6 +509,54 @@ try {
   const pfOverlay = await preflight(async (a) => a.includes('--version') ? { code: 0, stdout: 'v', stderr: '' } : a.includes('--overlay-src') ? { code: 1, stdout: '', stderr: 'EPERM' } : { code: 0, stdout: '', stderr: '' });
   ok(pfOverlay.smokeOk && !pfOverlay.overlayOk, 'preflight: overlay denial is explicit');
   ok((await preflight(async () => ({ code: 0, stdout: 'v', stderr: '' }))).overlayOk, 'preflight: all green');
+  // tool availability probe (issue #7): warn before inference when a tool the peers use is
+  // absent IN THE ENVIRONMENT THEY RUN IN. The probe is one exec, identified by its shell line.
+  const probeSeen: string[][] = [];
+  const pfFake = (out: string, boxed = true) => async (a: string[]) => {
+    if (a.includes('--version')) return { code: 0, stdout: 'v', stderr: '' };
+    if (a.join(' ').includes('command -v')) { probeSeen.push(a); return { code: 0, stdout: out, stderr: '' }; }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const pfRgGone = await preflight(pfFake('MISSING:rg'), root, true);
+  ok(pfRgGone.smokeOk && /rg unavailable/.test(pfRgGone.toolsWarning ?? '') && /probed inside the bwrap box/.test(pfRgGone.toolsWarning ?? '') &&
+    probeSeen.at(-1)![0] === 'bwrap', 'preflight: rg missing inside the box warns about rg, probed through wrap()');
+  probeSeen.length = 0;
+  const pfRgHere = await preflight(pfFake(''), root, true);
+  ok(pfRgHere.overlayOk && pfRgHere.toolsWarning === undefined && probeSeen.length === 1,
+    'preflight: rg present inside the box -> no tools warning, one probe exec only');
+  probeSeen.length = 0;
+  const pfHost = await preflight(pfFake('MISSING:rg\nMISSING:python3'), root, false);
+  ok(/rg unavailable/.test(pfHost.toolsWarning ?? '') && /python3 unavailable/.test(pfHost.toolsWarning ?? '') &&
+    /probed on the host/.test(pfHost.toolsWarning ?? '') && probeSeen.at(-1)![0] === '/bin/sh' && !probeSeen.at(-1)!.includes('bwrap'),
+    'preflight: unsandboxed probe runs on the host and names both missing tools');
+  // pi resolves rg from its own bin dir before PATH: PATH must not be the only thing consulted,
+  // or every host with a bundled rg gets a false warning. Real shell, controlled env, no network.
+  const pibin = join(root, 'pibin'); mkdirSync(join(pibin, 'bin'), { recursive: true });
+  writeFileSync(join(pibin, 'bin', 'rg'), '#!/bin/sh\nexit 0\n'); chmodSync(join(pibin, 'bin', 'rg'), 0o755);
+  const realExec = (agentDir: string) => async (argv: string[]) => ({ code: 0,
+    stdout: execFileSync(argv[0], argv.slice(1), { encoding: 'utf8',
+      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PATH: '/nonexistent' } }), stderr: '' });
+  const pfBundled = await preflight(realExec(pibin), root, false);
+  ok(!/rg unavailable/.test(pfBundled.toolsWarning ?? '') && /python3 unavailable/.test(pfBundled.toolsWarning ?? ''),
+    'preflight: rg resolved from pi\'s bin dir (absent from PATH) does not warn; a genuinely absent tool still does');
+  mkdirSync(join(root, 'nobin'), { recursive: true });
+  const pfNoneHere = await preflight(realExec(join(root, 'nobin')), root, false);
+  ok(/rg unavailable/.test(pfNoneHere.toolsWarning ?? '') && /python3 unavailable/.test(pfNoneHere.toolsWarning ?? ''),
+    'preflight: a tool missing from both bin dir and PATH still warns');
+  probeSeen.length = 0;
+  const pfProbeThrows = await preflight(async (a) => a.includes('--version') ? { code: 0, stdout: 'v', stderr: '' }
+    : a.join(' ').includes('command -v') ? (() => { throw new Error('EPERM'); })() : { code: 0, stdout: '', stderr: '' });
+  ok(pfProbeThrows.smokeOk && pfProbeThrows.toolsWarning === undefined,
+    'preflight: a probe that cannot run stays silent instead of claiming a tool is missing');
+  { // the warning attaches where the other sandbox warnings attach, and never blocks the run
+    const rt = new SwarmRuntime(creator(success), async () => 'pass');
+    rt.start({ ...launch, runId: 'reg-tools' }, { ...s, sandbox: 'off' }, 'session', root,
+      { preflight: { available: true, smokeOk: true, overlayOk: true, toolsWarning: 'probed on the host PATH: rg unavailable (grep will fail)' } });
+    await rt.completion;
+    ok(rt.run?.state === 'done' && /rg unavailable/.test(rt.run.sandbox?.warning ?? ''),
+      'runtime: a missing-tool warning surfaces on run.sandbox.warning without blocking the run');
+    ok((await import('../view.ts')).toolkitLines(rt.run as any).join('\n').includes('rg unavailable'), 'badge shows the tools warning');
+  }
   { const r = new SwarmRuntime(creator(success), async () => 'pass');
     assert.throws(() => r.start({ ...launch, apply: true, reduceGate: 'true' }, s, 'session', root), /working bwrap sandbox/); checks++; }
   assert.throws(() => validateLaunch({ ...launch, apply: true, reduceGate: 'x' }, { ...s, sandbox: 'off' }), /no escape hatch/); checks++;
