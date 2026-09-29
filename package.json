@@ -1,10 +1,19 @@
 {
-  "name": "pi-swarm",
+  "name": "@goodman-b/pi-swarm",
   "version": "0.4.0",
   "type": "module",
   "license": "MIT",
   "description": "Board-coordinated self-organising peer swarm for Pi; no subagent profiles or workflow dependency",
   "author": "goodman-b",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goodman-b/pi-swarm.git"
+  },
+  "homepage": "https://github.com/goodman-b/pi-swarm#readme",
+  "bugs": "https://github.com/goodman-b/pi-swarm/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "pi-package",
     "pi",

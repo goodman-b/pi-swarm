@@ -22,8 +22,11 @@ run — board, lane reports and transcripts survive on disk.
 ## Quickstart
 
 ```bash
-pi install git:github.com/goodman-b/pi-swarm   # or: pi install ./pi-swarm
+pi install npm:@goodman-b/pi-swarm
 ```
+
+Alternatively: `pi install git:github.com/goodman-b/pi-swarm` or
+`pi install ./pi-swarm` for a local checkout.
 
 Requires Pi, Node ≥ 22.19 and Python 3 on POSIX. The optional writer also
 requires Linux with working `bwrap` overlay support.
