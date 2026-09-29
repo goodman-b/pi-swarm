@@ -1,0 +1,30 @@
+{
+  "name": "pi-swarm",
+  "version": "0.4.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Board-coordinated self-organising peer swarm for Pi; no subagent profiles or workflow dependency",
+  "author": "goodman-b",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "swarm",
+    "multi-agent"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "node test/run.mjs && python3 board/test-swarm-board.py"
+  }
+}

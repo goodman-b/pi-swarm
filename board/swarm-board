@@ -1,0 +1,822 @@
+#!/usr/bin/env python3
+"""swarm-board — a standalone file-backed blackboard for cooperating peers.
+
+Stigmergic coordination for agents that share a filesystem but have no peer
+channel. Every event is one JSONL line under a run directory; claims are
+advisory locks as files. No daemon, no service, no ports.
+
+Design notes:
+  - Append-only + flock: safe under 16 concurrent writers.
+  - The board OUTLIVES the run, so postmortems are `jq` over one file.
+  - Verbs are deliberately few. Every verb added is prompt tokens spent on
+    every worker turn, on a lane where tool schemas are already ~50% of context.
+
+Usage (agents call this via bash):
+  swarm-board --run <id> --me <name> post <thread> <message>
+  swarm-board --run <id> --me <name> inbox [--all]
+  swarm-board --run <id> --me <name> claim <slice> [--note ...]
+  swarm-board --run <id> --me <name> release <slice>
+  swarm-board --run <id> claims
+  swarm-board --run <id> team
+  swarm-board --run <id> --me <name> done <reason> [--artifact PATH]
+  swarm-board --run <id> --me <name> blocked <reason>
+  swarm-board --run <id> budget
+  swarm-board --run <id> goal [--set TEXT]        # goal + definition of done
+  swarm-board --run <id> log [--thread T] [--tail N]
+  swarm-board --run <id> reap [--older-than S] [--force]     # drop stale claims
+  swarm-board --run <id> rescue [--stale-after S] [--force]  # break a dead peer's lock
+Add --root PATH for another board root, --stdin to read a posted message from standard input.
+"""
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import math
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(os.environ.get("SWARM_BOARD_ROOT", str(Path.home() / ".pi" / "swarm-boards")))
+
+
+def apply_root(explicit):
+    """`--root` wins over $SWARM_BOARD_ROOT wins over the default.
+
+    Session scoping is done by making the session a PATH SEGMENT of the root.
+    The owning runtime resolves it ONCE and passes the full `--root` on every call.
+    That is the safe half of the idea I rejected earlier: deriving the segment
+    per-child from PI_SESSION_ID would let a child with an empty environment
+    silently coordinate on its own private board. An explicit path cannot.
+    """
+    global ROOT
+    if explicit:
+        ROOT = Path(explicit)
+
+# Session identity, recorded but NOT used in the path.
+#
+# Boards are listed per-session but stored flat. The question raised in review
+# (2026-09-16: "should swarm not be per session, same as the agents") is answered
+# here. Putting the session in the PATH
+# would be the obvious implementation and is the wrong one: peers resolve their
+# board from `--run <id>` alone, so any agent whose environment lacked
+# PI_SESSION_ID would silently get a DIFFERENT board and coordinate with nobody.
+# A split-brain swarm that looks healthy is the worst failure available here.
+# Tagging is advisory; coordination stays keyed on `--run` only.
+SESSION = os.environ.get("PI_SESSION_ID", "")
+
+
+# --------------------------------------------------------------------------
+# storage
+# --------------------------------------------------------------------------
+
+def argv_text(x):
+    """Repair surrogates from a non-UTF-8 argv, once, at the boundary.
+
+    Python decodes argv with surrogateescape, so `claim $'q\xff'` yields a
+    lone surrogate. It survived into the SHA1 and into json.dumps, crashing
+    both (fan-out audit, claim-atomicity/D6). Repairing at entry means nothing
+    downstream has to know.
+    """
+    if isinstance(x, str):
+        return x.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    if isinstance(x, list):
+        return [argv_text(i) for i in x]
+    return x
+
+
+def safe_name(raw: str, fallback: str = "_") -> str:
+    """Filesystem-safe component. Rejects traversal rather than mangling it."""
+    out = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in str(raw))
+    # Never strip leading dots: '..alice' collapsed to 'alice' (shared cursors, audit arg-safety/#4),
+    # '' / '..' / '...' all collapsed to the SAME literal dir - a silent board merge - and '../r'
+    # became '_r', a silent redirect that passed the escape check. Prefix instead: always a plain
+    # component, always distinct from what it came from. audit-r2/B7.
+    if not out or out.startswith(".") or out.replace(".", "") == "":
+        out = "_" + out
+    return out
+
+
+def die(msg: str, code: int = 2):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def run_dir(run_id: str, create: bool = True) -> Path:
+    """Resolve a run directory, refusing to escape ROOT.
+
+    `--run` was previously joined to ROOT unvalidated, so `--run ../../tmp/x`
+    wrote a board outside the root (swarm run `peers1`, skein/ARG-SAFETY-1).
+    `create=False` for pure reads, so a typo no longer materialises a run
+    (doubter/READ-6).
+    """
+    d = (ROOT / safe_name(run_id, "run")).resolve()
+    if not str(d).startswith(str(ROOT.resolve()) + os.sep):
+        print("refusing: --run escapes the board root", file=sys.stderr)
+        sys.exit(2)
+    if create:
+        (d / "claims").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def board_path(run_id: str, create: bool = True) -> Path:
+    return run_dir(run_id, create=create) / "board.jsonl"
+
+
+TS_FLOOR = 1_000_000_000        # 2001-09-09; below this is not a real timestamp
+
+def _lock_timeout() -> float:
+    """SWARM_BOARD_LOCK_TIMEOUT without the NaN trap the file closed for --older-than (:518).
+    NaN makes `time.time() > deadline` false forever - an infinite lock spin; a non-number is an
+    import-time traceback. audit-r2/B12."""
+    try:
+        v = float(os.environ.get("SWARM_BOARD_LOCK_TIMEOUT", ""))
+    except (TypeError, ValueError):
+        return 20.0
+    return v if v > 0 and math.isfinite(v) else 20.0
+
+
+LOCK_TIMEOUT = _lock_timeout()
+
+
+def append(run_id: str, event: dict) -> dict:
+    """Append one event under an exclusive lock on a DEDICATED lock file.
+
+    Four defects from the 2026-09-16 audit are handled here:
+
+    F4 — the lock used to be taken on `board.jsonl` itself, i.e. on the INODE.
+    Any rotate/`mv` mid-critical-section left the holder locking a detached
+    inode while the next writer locked a fresh one: no exclusion, no error, and
+    a writer told "posted" whose event was in the rotated-away file. A separate
+    `board.lock` is stable across rotation.
+
+    F2 — `LOCK_EX` blocked forever with no feedback: one wedged holder stalled
+    every agent silently (measured: a 7 s stall reported nothing). Now a
+    non-blocking retry against a deadline, and it SAYS SO on the way.
+
+    F1 — `ts` stamped outside the lock meant on-disk order != ts order.
+    scout/DEFECT C — a torn tail is terminated before appending, so a crashed
+    write only ever loses its own record.
+    """
+    d = run_dir(run_id)
+    lock_file = d / "board.lock"
+    path = board_path(run_id)
+    deadline = time.time() + LOCK_TIMEOUT
+    warned = False
+    with open(lock_file, "a+") as lk:
+        while True:
+            try:
+                fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() > deadline:
+                    print("board is locked by another process; gave up after %.0fs"
+                          % LOCK_TIMEOUT, file=sys.stderr)
+                    sys.exit(4)
+                if not warned:
+                    print("waiting for the board lock…", file=sys.stderr)
+                    warned = True
+                time.sleep(0.05)
+        try:
+            event.setdefault("ts", time.time())
+            line = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+            with open(path, "ab") as fh:      # opened INSIDE the lock (F4)
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() > 0:
+                    with open(path, "rb") as probe:
+                        probe.seek(-1, os.SEEK_END)
+                        if probe.read(1) != b"\n":
+                            fh.write(b"\n")   # terminate a torn record
+                    fh.seek(0, os.SEEK_END)
+                fh.write(line)
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+    return event
+
+
+def read_events(run_id: str) -> list:
+    # create=False: a typo'd --run on a read verb used to mkdir a phantom run
+    # (peers1, doubter/READ-6), which then showed up in `runs` listings.
+    path = board_path(run_id, create=False)
+    if not path.exists():
+        return []
+    out = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a live tail is routinely torn
+            # Objects only. `null`, `5`, `"hi"` and `[...]` are all valid JSON
+            # and previously reached every consumer, where `.get`/`["kind"]`
+            # raised (swarm run `peers1`, scout/DEFECT A). One hand-edited line
+            # killed the board for every reader.
+            if not (isinstance(obj, dict) and isinstance(obj.get("kind"), str)):
+                continue
+            # `ts` must be a real number. A string ts passed the dict+kind
+            # check and then crashed time.localtime() in fmt() and the min()
+            # in cmd_budget (found by the regression suite, defect #19).
+            # Coerce rather than drop: the record is still information.
+            ts = obj.get("ts")
+            if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+                try:
+                    obj["ts"] = float(ts)
+                except (TypeError, ValueError):
+                    obj["ts"] = 0.0
+            # 1e999 / Infinity / NaN are already floats, so they pass the test above and then
+            # crash time.localtime() in fmt() and int(time.time() - inf) in team/budget. Because
+            # cmd_inbox advances its cursor only after printing, ONE such line wedges the inbox
+            # for the whole run - every later message is unreachable. audit-r2/B3.
+            try:
+                if not math.isfinite(obj["ts"]):
+                    obj["ts"] = 0.0
+            except TypeError:
+                obj["ts"] = 0.0
+            out.append(obj)
+    return out
+
+
+def ident_key(name: str) -> str:
+    """Collision-free filename component for an agent identity.
+
+    `safe_name` alone is NOT enough: it strips leading dots, so `..alice`
+    reduced to `alice` and shared her cursor. Fan-out audit, arg-safety/#4 —
+    an impersonator could read a peer's inbox AND advance her cursor, losing
+    her messages permanently. Identities are compared EXACTLY (no casefold):
+    `Alice` and `alice` are different agents.
+    """
+    digest = hashlib.sha1(str(name).encode("utf-8", "surrogatepass")).hexdigest()[:10]
+    return "%s.%s" % (safe_name(name, "anon")[:32], digest)
+
+
+def cursor_path(run_id: str, me: str) -> Path:
+    return run_dir(run_id, create=False) / (".cursor-" + ident_key(me))
+
+
+_CTRL = {c: None for c in range(32)}
+_CTRL.pop(9, None)                      # keep TAB
+_CTRL[127] = None
+
+
+def clean(x, limit: int = 2000) -> str:
+    """Strip control characters from anything an agent authored.
+
+    Agent-supplied `--me` and message text were rendered raw, so a newline in a
+    name forged a whole extra row in another agent's `team` view, and ESC
+    sequences reached a peer's terminal (fan-out audit, arg-safety/#7). In a
+    swarm every rendered line is *read by another agent*, which makes this a
+    peer-to-peer injection channel, not a cosmetic issue.
+
+    Newlines used to be *deleted* here, which glued two findings into one
+    sentence and stuck the tail of one URL onto the head of the next (run rsi1,
+    doubter/18:04). They now render as a visible separator: still one line on
+    screen, but the boundary survives. Same reasoning as the truncation marker —
+    a peer must be able to tell "the board joined these" from "the author wrote
+    it that way".
+    """
+    out = str(x).replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ¶ ")
+    out = out.translate(_CTRL)
+    return out if len(out) <= limit else out[:limit] + "… [truncated — full text in board.jsonl]"
+
+
+def fmt(ev: dict) -> str:
+    t = time.strftime("%H:%M:%S", time.localtime(ev.get("ts", 0)))
+    kind = ev.get("kind", "?")
+    who = ev.get("agent", "-")
+    if kind == "post":
+        return f"[{t}] {clean(who)} @{clean(ev.get('thread', 'main'))}: {clean(ev.get('text', ''))}"
+    if kind in ("claim", "release"):
+        note = f" — {clean(ev['note'])}" if ev.get("note") else ""
+        return f"[{t}] {clean(who)} {kind.upper()} {clean(ev.get('slice', ''))}{note}"
+    if kind == "done":
+        art = f" -> {clean(ev['artifact'])}" if ev.get("artifact") else ""
+        return f"[{t}] {clean(who)} DONE: {clean(ev.get('reason', ''))}{art}"
+    if kind == "blocked":
+        return f"[{t}] {clean(who)} BLOCKED: {clean(ev.get('reason', ''))}"
+    if kind == "goal":
+        return f"[{t}] GOAL SET"
+    return f"[{t}] {clean(str(who))} {clean(str(kind))}: {json.dumps(ev, ensure_ascii=False)}"
+
+
+# --------------------------------------------------------------------------
+# verbs
+# --------------------------------------------------------------------------
+
+def cmd_post(a):
+    if a.stdin:
+        # The escape hatch from shell expansion. A peer that writes
+        # `post main "...`cmd`..."` loses whatever the shell substituted away,
+        # silently and permanently (rsi1: two findings lost their curl
+        # commands). Piping with a quoted heredoc cannot expand anything.
+        text = sys.stdin.read().rstrip("\r\n")
+    else:
+        text = " ".join(a.message)
+    if not text.strip():
+        die("empty post — message text was lost (shell expansion? use --stdin)")
+    append(a.run, {"kind": "post", "agent": a.me, "thread": a.thread, "text": text})
+    print(f"posted to @{a.thread}")
+
+
+def cmd_inbox(a):
+    """Deliver unseen events, then advance the cursor.
+
+    The cursor was a WALL-CLOCK watermark advanced BEFORE printing (run
+    `peers1`, cynic/C1-C3, corroborated by doubter/READ-5):
+      - clock skew or an out-of-order append silently skipped messages;
+      - any failure between advance and print lost them permanently;
+      - one future-stamped record poisoned the cursor for the whole run.
+
+    It is now a COUNT of events consumed, written only after delivery
+    succeeds. Re-reading is cheap; losing a peer's finding is not.
+    """
+    rd = run_dir(a.run, create=False)          # a typo'd --run must not materialise a board
+    if not rd.exists():                        # audit-r2/B1: it used to print "no new messages"
+        print(f"no such run: {a.run}")          # from an empty dir it had just created
+        sys.exit(1)
+    events = read_events(a.run)
+    cur = cursor_path(a.run, a.me)
+    seen = 0
+    if not a.all and cur.exists():
+        try:
+            seen = max(0, int(cur.read_text().strip()))
+        except ValueError:
+            seen = 0
+    seen = min(seen, len(events))           # board truncated/rotated → clamp
+
+    fresh = events[seen:]
+    new = [e for e in fresh if e.get("agent") != a.me]
+
+    if not new:
+        cur.write_text(str(len(events)))
+        print("no new messages")
+        return
+    print(f"{len(new)} new:")
+    for e in new:
+        print("  " + fmt(e))
+    # Flush FIRST. Buffered stdout means print() succeeding proves nothing —
+    # the write can still fail at flush, after the cursor has moved.
+    sys.stdout.flush()
+    # Only now, with delivery actually on the wire.
+    cur.write_text(str(len(events)))
+
+
+def slice_key(name: str) -> str:
+    """Stable claim filename: readable slug + hash of the NORMALISED name.
+
+    Two bugs, one root cause, found in run `peers1`:
+      - many-to-one: 'a b' and 'a_b' both mangled to 'a_b', so claiming one
+        falsely DENIED the other;
+      - case-split: 'auth-layer' and 'Auth-Layer' produced TWO locks, so two
+        agents both got `claimed:` for the same work. That defeats
+        de-confliction entirely — the mechanism the swarm runs on.
+
+    Normalising (casefold + whitespace collapse) makes equivalent names collide
+    on purpose; the hash makes non-equivalent names never collide by accident.
+
+    Scope is deliberate. Case and repeated whitespace are folded; SEPARATORS are
+    not — `auth-layer` and `auth layer` stay distinct. Folding separators too
+    would re-create defect #3 (`a b` vs `a_b` sharing a lock), and the two
+    requirements are in direct tension. Briefs must therefore quote slice names
+    exactly as the goal lists them; the `peers1` brief already does.
+    """
+    norm = " ".join(str(name).split()).casefold()
+    digest = hashlib.sha1(norm.encode("utf-8", "surrogatepass")).hexdigest()[:10]
+    # Slug from the NORMALISED name, not the raw one: a case-preserving slug
+    # reintroduces the very split the hash exists to close.
+    return "%s.%s" % (safe_name(norm, "slice")[:40], digest)
+
+
+def slice_path(run, name):
+    return run_dir(run) / "claims" / slice_key(name)
+
+
+@contextlib.contextmanager
+def claims_lock(run_id):
+    """Serialise check-then-act sequences over the claims directory.
+
+    `cmd_release` and `cmd_reap` did exists() -> read_claim() -> ownership check
+    -> unlink() holding NO lock (found by swarm run `html1`/`smoke1`, confirmed
+    from source: flock appeared only inside append()). Between the check and the
+    unlink another agent could release and re-acquire, and the unlink then
+    deleted the NEW owner's lock while appending a release event that looked
+    legitimate — a textbook TOCTOU/ABA. `cmd_claim`'s O_EXCL+link is atomic on
+    its own, but it must take the same lock or a concurrent release can unlink
+    the claim it just published.
+    """
+    d = run_dir(run_id)
+    with open(d / "claims.lock", "a+") as lk:
+        deadline = time.time() + LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() > deadline:
+                    print("claims directory is locked by another process; gave up",
+                          file=sys.stderr)
+                    sys.exit(4)
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def read_claim(lock):
+    """Return the claim dict, or None if absent/empty/unparsable.
+
+    None means 'do not touch this' — never 'free to take'. Conflating the two
+    is DEFECT 2 below.
+    """
+    try:
+        return json.loads(lock.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def cmd_claim(a):
+    """Advisory lock, published atomically.
+
+    Write-then-rename, NOT O_EXCL-then-write (found by swarm run `peers1`,
+    referee/DEFECT 3): O_EXCL creates the file at zero bytes and the payload
+    lands on the *next* statement. In that window a claim is simultaneously
+    BLOCKING to a second claimant (reported as `held by ?`) and INVISIBLE to
+    `claims`, which skips unparsable files. os.rename is atomic within a
+    filesystem, so the lock only ever exists fully formed.
+    """
+    lock = slice_path(a.run, a.slice)
+    with claims_lock(a.run):
+        return _claim_locked(a, lock)
+
+
+def _claim_locked(a, lock):
+    payload = json.dumps({"agent": a.me, "ts": time.time(), "slice": a.slice, "note": a.note})
+    # A pid-derived temp name is not unique enough: a crash between O_EXCL and
+    # the finally-unlink leaves <slice>.<pid>.tmp behind, and a later process
+    # assigned the same pid claiming the same slice hits FileExistsError on the
+    # OPEN — which this function's single `except FileExistsError` reports as
+    # "DENIED: held by ?" plus a bogus collision post, for a slice nobody holds.
+    # (skein, run `black6`.) mkstemp guarantees a fresh name every time.
+    fd, tmpname = tempfile.mkstemp(prefix=lock.name + ".", suffix=".tmp",
+                                   dir=str(lock.parent))
+    tmp = Path(tmpname)
+    try:
+        os.fchmod(fd, 0o600)     # 0600: a lock the group can rewrite is not a lock (D11)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.link(str(tmp), str(lock))     # fails if the claim already exists
+    except FileExistsError:
+        held = read_claim(lock)
+        holder = held.get("agent", "?") if held else "?"
+        if holder == a.me:
+            print(f"already yours: {a.slice}")
+            return
+        # Collision is normal and expected — this is the de-confliction signal.
+        append(a.run, {"kind": "post", "agent": a.me, "thread": "claims",
+                       "text": f"collision on '{a.slice}' — held by {holder}, backing off"})
+        print(f"DENIED: '{a.slice}' is held by {holder}. Pick different work.")
+        sys.exit(3)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    append(a.run, {"kind": "claim", "agent": a.me, "slice": a.slice, "note": a.note})
+    print(f"claimed: {a.slice}")
+
+
+def cmd_release(a):
+    """Release only what you hold.
+
+    An unreadable lock is NOT yours (found by swarm run `peers1`,
+    referee/DEFECT 2): the old code swallowed the parse error and fell through
+    to unlink(), so any agent could delete a lock whose file was empty — which
+    is exactly what DEFECT 3's window produced. Unparsable now means refuse.
+    """
+    # create=False: releasing something in a run that does not exist used to
+    # MATERIALISE that run (dir + claims/ + claims.lock) before refusing —
+    # inconsistent with cmd_reap, and it litters `runs` with ghosts
+    # (black6sym finding 4).
+    if not (run_dir(a.run, create=False) / "claims").is_dir():
+        print(f"not held: {a.slice} — no such run")
+        sys.exit(3)
+    lock = slice_path(a.run, a.slice)
+    with claims_lock(a.run):
+        return _release_locked(a, lock)
+
+
+def _release_locked(a, lock):
+    if not lock.exists():
+        # Previously printed "released: X" rc=0 and appended a RELEASE event, so
+        # the board asserted a release that never happened (fan-out audit,
+        # arg-safety/#6). A blackboard that records fiction is worse than one
+        # that records nothing.
+        print(f"not held: {a.slice} — nothing to release")
+        sys.exit(3)
+    if lock.exists():
+        held = read_claim(lock)
+        if held is None:
+            print(f"refusing: claim file for '{a.slice}' is unreadable — not releasing "
+                  f"a lock whose owner cannot be established")
+            sys.exit(3)
+        if held.get("agent") != a.me:
+            print(f"not yours to release: {a.slice} (held by {held.get('agent', '?')})")
+            sys.exit(3)
+        lock.unlink()
+    append(a.run, {"kind": "release", "agent": a.me, "slice": a.slice})
+    print(f"released: {a.slice}")
+
+
+def cmd_reap(a):
+    """Release claims older than --older-than seconds.
+
+    Without this a killed agent holds its slice forever: no TTL, no liveness
+    check, so the work is never redone and every later claimant is denied
+    (fan-out audit, claim-atomicity/D9). Deliberately MANUAL and explicit — an
+    automatic lease would silently revoke a claim from an agent that is merely
+    slow, and `peers1` showed two agents going quiet for 20+ minutes before
+    finishing correctly. Reaping is an operator decision, and it is logged.
+    """
+    if not (a.older_than >= 0):
+        # `age is always >= 0, so any negative threshold reaps EVERY claim on the
+        # board and logs it as a normal reap (black6sym repro: --older-than -5).
+        # `not (x >= 0)` rather than `x < 0`: NaN fails BOTH comparisons, and
+        # `nan` reaps every claim just like a negative (harnessprobe ERROR-1,
+        # confirmed by three independent scratch repros; `inf` is safe —
+        # `age < inf` is True so nothing is skipped).
+        print("refusing: --older-than must be a finite number >= 0 seconds", file=sys.stderr)
+        sys.exit(2)
+    d = run_dir(a.run, create=False) / "claims"
+    if not d.is_dir():
+        print("no claims")
+        return
+    with claims_lock(a.run):
+        return _reap_locked(a, d)
+
+
+def _reap_locked(a, d):
+    now, reaped = time.time(), 0
+    for f in sorted(d.iterdir()):
+        if f.name.endswith(".tmp"):
+            continue
+        row = read_claim(f)
+        if not isinstance(row, dict):
+            continue
+        ts = row.get("ts")
+        # not (x > FLOOR) rather than x <= FLOOR: json.loads accepts NaN and Infinity, and NaN
+        # fails BOTH comparisons - it would reach `age = now - ts`, get unlinked, then raise
+        # ValueError in "%d" and abort the loop after destroying the claim. audit-r2/rabbit #33.
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool) or not (math.isfinite(ts) and ts > TS_FLOOR):
+            # A lock with no usable ts has UNKNOWN age. Skip it: reaping it
+            # would destroy a possibly-live claim, and raising would abort the
+            # loop before later files (Astra code review F2).
+            print("skipping %s: claim has no usable timestamp" % clean(f.name))
+            continue
+        age = now - ts
+        if age < a.older_than:
+            continue
+        f.unlink(missing_ok=True)
+        append(a.run, {"kind": "release", "agent": "reaper", "slice": row.get("slice", f.name),
+                       "note": "reaped from %s after %ds" % (row.get("agent", "?"), age)})
+        print("reaped: %s (held by %s, %ds)" % (clean(row.get("slice", "?")),
+                                                clean(row.get("agent", "?")), age))
+        reaped += 1
+    print("%d reaped" % reaped)
+
+
+def cmd_rescue(a):
+    """Release a claim held by a DEAD peer so its slice can be re-claimed.
+
+    The complement of `reap`: reap is a blanket age sweep, rescue is a
+    targeted decision about ONE peer that died mid-run (harnessprobe,
+    2026-09-09: three peers stopped with no terminal event and their slices
+    were denied to every later claimant forever). Liveness is measured on the
+    BOARD, not the filesystem: a peer that posted within --stale-after is
+    assumed alive and the rescue is refused (peers1 showed a peer going
+    quiet 20+ minutes and finishing correctly — a merely-slow peer must not
+    be robbed). `--force` is the operator's judgment call and is logged as
+    such. The release event records the reason so the audit trail says who
+    took what and why.
+    """
+    if not (run_dir(a.run, create=False) / "claims").is_dir():
+        print("nothing to rescue: no such run")
+        sys.exit(3)
+    lock = slice_path(a.run, a.slice)
+    with claims_lock(a.run):
+        if not lock.exists():
+            print(f"not held: {a.slice}")
+            sys.exit(3)
+        held = read_claim(lock)
+        if held is None:
+            print(f"refusing: claim file for '{a.slice}' is unreadable")
+            sys.exit(3)
+        holder = held.get("agent", "?")
+        last_seen = last_peer_ts(a.run, holder)
+        stale_for = (time.time() - last_seen) if last_seen else None
+        # None means CANNOT PROVE DEAD (rotated/truncated board) - not proof of death. audit-r2/B8
+        if not a.force and (stale_for is None or stale_for <= a.stale_after):
+            why = (f"posted {int(stale_for)}s ago (<= {a.stale_after}s)" if stale_for is not None
+                   else "liveness unknown - no recent post proves it dead")
+            print(f"refusing: {holder} {why}; use --force to override")
+            sys.exit(2)
+        lock.unlink()
+        why = (f"dead: no event for {int(stale_for)}s" if stale_for is not None
+               else "no board events at all")
+        if a.force:
+            why += " (forced)"
+        append(a.run, {"kind": "release", "agent": "reaper", "slice": held.get("slice", a.slice),
+                       "note": "rescued from %s: %s" % (holder, why)})
+        print("rescued: %s (held by %s, %s)" % (a.slice, holder, why))
+
+
+def last_peer_ts(run_id, agent):
+    """The agent's newest event ts, or None. A peer that never posted has
+    UNKNOWN liveness — that is not 'dead', so callers must treat None as
+    'cannot prove dead' and require --force."""
+    try:
+        best = None
+        for e in read_events(run_id):      # the hardened reader: survives undecodable lines,
+            if not isinstance(e, dict):    # junk records and non-finite ts, as every other verb
+                continue                   # has since defect #19. This one had been missed.
+            if e.get("agent") == agent and isinstance(e.get("ts"), (int, float)) and e["ts"] > TS_FLOOR:
+                best = e["ts"] if best is None else max(best, e["ts"])
+        return best
+    except OSError:
+        return None
+
+
+def cmd_claims(a):
+    d = run_dir(a.run, create=False) / "claims"
+    if not d.is_dir():
+        # `claims` is protocol step 1 for every peer, so a mistyped --run used to
+        # greet them with a FileNotFoundError traceback (Astra code review F1).
+        # cmd_reap already had this guard; cmd_claims did not.
+        print("no active claims")
+        return
+    rows = []
+    for f in sorted(d.iterdir()):
+        if f.name.endswith(".tmp"):
+            continue        # in-flight or crashed claim (stitch/DEFECT B)
+        row = read_claim(f)
+        if isinstance(row, dict) and row.get("slice"):
+            rows.append(row)
+    if not rows:
+        print("no active claims")
+        return
+    print(f"{len(rows)} active claims:")
+    for r in rows:
+        ts = r.get("ts")
+        # A payload with no/!numeric ts rendered an age of ~1.8 billion seconds
+        # (peers1, doubter/READ-4). Say "unknown" rather than print nonsense.
+        # and ts > 0 is True for +Infinity (json.loads accepts 1e999), which then overflows
+        # int(time.time() - inf) and takes the whole `claims` verb - a protocol step - down.
+        age = ("%ds" % int(time.time() - ts)) if isinstance(ts, (int, float)) and not isinstance(ts, bool) \
+            and math.isfinite(ts) and ts > 0 else "age?"
+        note = f" — {clean(r['note'])}" if r.get("note") else ""
+        print(f"  {clean(r.get('slice'))}  [{clean(r.get('agent'))}, {age}]{note}")
+
+
+def cmd_team(a):
+    events = read_events(a.run)
+    agents = {}
+    for e in events:
+        who = e.get("agent")
+        if not isinstance(who, str) or not who or who in ("system", "reaper"):
+            continue    # `goal --set` posts as system; it is not an agent
+        s = agents.setdefault(who, {"posts": 0, "claims": 0, "state": "active", "last": 0})
+        s["last"] = max(s["last"], e.get("ts", 0))
+        kind = e.get("kind")
+        if kind == "post":
+            s["posts"] += 1
+        elif kind == "claim":
+            s["claims"] += 1
+        elif kind in ("done", "blocked"):
+            s["state"] = kind
+    if not agents:
+        print("no agents yet")
+        return
+    print(f"{len(agents)} agents:")
+    for who, s in sorted(agents.items()):
+        idle = int(time.time() - s["last"])
+        print(f"  {clean(who)[:16]:16} {s['state']:8} posts={s['posts']:<3} claims={s['claims']:<3} idle={idle}s")
+
+
+def cmd_done(a):
+    append(a.run, {"kind": "done", "agent": a.me,
+                   "reason": " ".join(a.reason), "artifact": a.artifact})
+    print("DONE recorded. Stop working and return your summary.")
+
+
+def cmd_blocked(a):
+    append(a.run, {"kind": "blocked", "agent": a.me, "reason": " ".join(a.reason)})
+    # The Astra lesson, restated at the point of use.
+    print("BLOCKED recorded. This is a SUCCESSFUL outcome — stop and report. "
+          "Do not work around a blocker you were not asked to remove.")
+
+
+def cmd_budget(a):
+    events = read_events(a.run)
+    meta = run_dir(a.run, create=False) / "budget.json"
+    cap = {}
+    if meta.exists():
+        try:
+            cap = json.loads(meta.read_text())
+        except Exception:
+            cap = {}
+        if not isinstance(cap, dict):
+            cap = {}       # '[1,2]' and '"600"' parse fine and are not dicts (F3)
+    # Only REAL timestamps. read_events coerces an unparseable ts to 0.0 rather
+    # than dropping the record (defect #19), so a single repaired line used to
+    # drag min() to zero and print a ~1.8-billion-second elapsed — which, with a
+    # cap set, told every peer "OVER BUDGET, wrap up now" (Astra code review F4).
+    # The old `e.get("ts", time.time())` default was already dead code.
+    real = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float)) and e["ts"] > TS_FLOOR]
+    started = min(real, default=time.time())
+    elapsed = int(time.time() - started)
+    done = sum(1 for e in events if e.get("kind") in ("done", "blocked"))
+    wall = cap.get("wall_s")
+    # budget.json is operator-hand-authored and undocumented; a string "3600" is truthy and then
+    # raises TypeError in the comparison, killing the verb for every peer. audit-r2/B4.
+    if not (isinstance(wall, (int, float)) and not isinstance(wall, bool) and math.isfinite(wall)):
+        wall = None
+    print(f"elapsed:   {elapsed}s" + (f" / {wall}s cap" if wall else ""))
+    print(f"events:    {len(events)}")
+    print(f"finished:  {done} agents")
+    if wall and elapsed > wall:
+        print("OVER WALL-CLOCK BUDGET — wrap up now, post your best partial result.")
+
+
+def cmd_goal(a):
+    if a.set:
+        # Stamp the run with its originating session, once, at seed time.
+        meta = run_dir(a.run) / "meta.json"
+        if not meta.exists():
+            meta.write_text(json.dumps({"session": SESSION, "created": time.time()}))
+        append(a.run, {"kind": "goal", "agent": "system", "text": a.set})
+        (run_dir(a.run) / "GOAL.md").write_text(a.set)
+        print("goal set")
+        return
+    g = run_dir(a.run, create=False) / "GOAL.md"
+    print(g.read_text() if g.exists() else "no goal set")
+
+
+def cmd_log(a):
+    events = read_events(a.run)
+    if a.thread:
+        events = [e for e in events if e.get("thread") == a.thread]
+    for e in (events[-a.tail:] if a.tail > 0 else []):
+        print(fmt(e))
+
+
+# --------------------------------------------------------------------------
+
+NAMED_VERBS = ("post", "claim", "release", "done", "blocked", "inbox")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="swarm-board", description=__doc__,
+                               formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--root", default="", help="board root; beats $SWARM_BOARD_ROOT")
+    p.add_argument("--run", required=True, help="swarm run id")
+    # No default identity. `--me` used to fall back to "anon", so a peer that
+    # dropped the flag posted the most findings in the run under a name that
+    # identified nobody, and the harvest had to guess who held the lock (rsi1:
+    # 20 findings as "anon"). Identity-bearing verbs now refuse to guess.
+    p.add_argument("--me", default="", help="your agent name (required for write verbs)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("post"); s.add_argument("thread"); s.add_argument("message", nargs="*"); s.add_argument("--stdin", action="store_true", help="read the message from stdin (safe against shell expansion)"); s.set_defaults(fn=cmd_post)
+    s = sub.add_parser("inbox"); s.add_argument("--all", action="store_true"); s.set_defaults(fn=cmd_inbox)
+    s = sub.add_parser("claim"); s.add_argument("slice"); s.add_argument("--note", default=""); s.set_defaults(fn=cmd_claim)
+    s = sub.add_parser("release"); s.add_argument("slice"); s.set_defaults(fn=cmd_release)
+    s = sub.add_parser("claims"); s.set_defaults(fn=cmd_claims)
+    s = sub.add_parser("reap"); s.add_argument("--older-than", type=float, default=1800); s.set_defaults(fn=cmd_reap)
+    s = sub.add_parser("rescue"); s.add_argument("slice"); s.add_argument("--stale-after", type=int, default=300); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_rescue)
+    s = sub.add_parser("team"); s.set_defaults(fn=cmd_team)
+    s = sub.add_parser("done"); s.add_argument("reason", nargs="+"); s.add_argument("--artifact", default=""); s.set_defaults(fn=cmd_done)
+    s = sub.add_parser("blocked"); s.add_argument("reason", nargs="+"); s.set_defaults(fn=cmd_blocked)
+    s = sub.add_parser("budget"); s.set_defaults(fn=cmd_budget)
+    s = sub.add_parser("goal"); s.add_argument("--set", default=""); s.set_defaults(fn=cmd_goal)
+    s = sub.add_parser("log"); s.add_argument("--thread", default=""); s.add_argument("--tail", type=int, default=50); s.set_defaults(fn=cmd_log)
+
+    a = p.parse_args()
+    if not a.me.strip() and a.cmd in NAMED_VERBS:
+        die(f"{a.cmd} needs --me <name>; it is how peers know who you are")
+    apply_root(a.root)
+    # Repair every user-supplied string once, here.
+    for field in ("run", "me", "slice", "message", "reason", "thread", "note", "artifact", "set"):
+        if hasattr(a, field):
+            setattr(a, field, argv_text(getattr(a, field)))
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
