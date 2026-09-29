@@ -94,9 +94,12 @@ async function smoke(exec: Exec, lockdown: boolean) {
 // reject the bundled binary. Mirror that order: bin dir, then PATH. Inside the box neither exists
 // (wrap() mounts /usr and the workspace only), which is how a healthy box can still hide rg.
 const TOOL_PROBE = 'for t in rg python3; do [ -x "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/bin/$t" ] || command -v "$t" >/dev/null 2>&1 || echo MISSING:$t; done';
-const NOTES: Record<string, string> = {
-  rg: 'rg unavailable (grep will fail)',
-  python3: 'python3 unavailable (the board and xattr helpers need it)',
+// What a missing tool costs depends on which environment it is missing from: peer tool calls
+// (grep/find/ls/read) resolve on the host in EVERY mode; only a staged run routes shell
+// commands through the box. Saying "grep will fail" about a box-only gap would be false.
+const NOTES: Record<string, { host: string; box: string }> = {
+  rg: { host: 'rg unavailable - the grep tool will fail', box: 'rg unavailable to sandboxed shell commands' },
+  python3: { host: 'python3 unavailable - the board and xattr helpers need it', box: 'python3 unavailable to sandboxed shell commands' },
 };
 async function probeTools(exec: Exec, boxed: boolean, lockdown: boolean, cwd: string) {
   // Probe with a real dir as cwd, never '/': wrap() ro-binds its cwd, so cwd:'/' would mount the
@@ -108,15 +111,16 @@ async function probeTools(exec: Exec, boxed: boolean, lockdown: boolean, cwd: st
   const missing = String(r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => l.startsWith('MISSING:')).map(l => l.slice(8));
   if (!missing.length) return undefined;
   return `probed ${boxed ? 'inside the bwrap box' : 'on the host (pi bin dir + PATH)'}: ` +
-    missing.map(t => NOTES[t] ?? `${t} unavailable`).join(', ');
+    missing.map(t => (NOTES[t] ?? { host: `${t} unavailable`, box: `${t} unavailable to sandboxed shell commands` })[boxed ? 'box' : 'host']).join(', ');
 }
 
-/** Box preflight plus ONE tool probe, run in the environment the tools actually run in. Only a
- * staged (apply) run puts tools inside the box - a plain read-only peer session runs in-process on
- * the host PATH - so `boxed` must be false whenever the sandbox is off or no writer is staged. */
+/** Box preflight plus a tool probe in each environment that can actually be used: the host (peer
+ * tool calls, every mode) and - only for a staged run, which is the only case where shell commands
+ * execute inside the box - the box itself. `boxed` must be false when the sandbox is off. */
 export async function preflight(exec: Exec, probeRoot: string = tmpdir(), boxed = true): Promise<Preflight> {
   const pf = await boxPreflight(exec, probeRoot);
-  pf.toolsWarning = await probeTools(exec, boxed && pf.smokeOk, pf.lockdown !== false, probeRoot);
+  pf.toolsWarning = [(await probeTools(exec, false, pf.lockdown !== false, probeRoot)),
+    ...(boxed && pf.smokeOk ? [await probeTools(exec, true, pf.lockdown !== false, probeRoot)] : [])].filter(Boolean).join('; ') || undefined;
   return pf;
 }
 

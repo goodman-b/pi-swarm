@@ -510,7 +510,7 @@ try {
   ok(pfOverlay.smokeOk && !pfOverlay.overlayOk, 'preflight: overlay denial is explicit');
   ok((await preflight(async () => ({ code: 0, stdout: 'v', stderr: '' }))).overlayOk, 'preflight: all green');
   // tool availability probe (issue #7): warn before inference when a tool the peers use is
-  // absent IN THE ENVIRONMENT THEY RUN IN. The probe is one exec, identified by its shell line.
+  // absent IN THE ENVIRONMENT THEY RUN IN. One probe per environment, identified by its shell line.
   const probeSeen: string[][] = [];
   const pfFake = (out: string, boxed = true) => async (a: string[]) => {
     if (a.includes('--version')) return { code: 0, stdout: 'v', stderr: '' };
@@ -522,8 +522,17 @@ try {
     probeSeen.at(-1)![0] === 'bwrap', 'preflight: rg missing inside the box warns about rg, probed through wrap()');
   probeSeen.length = 0;
   const pfRgHere = await preflight(pfFake(''), root, true);
-  ok(pfRgHere.overlayOk && pfRgHere.toolsWarning === undefined && probeSeen.length === 1,
-    'preflight: rg present inside the box -> no tools warning, one probe exec only');
+  ok(pfRgHere.overlayOk && pfRgHere.toolsWarning === undefined && probeSeen.length === 2,
+    'preflight: rg present everywhere -> no tools warning, one probe per environment');
+  // Codex review on #11: a gap that exists only inside the box must not claim the grep tool fails -
+  // peer grep/find/ls resolve on the host in every mode; only a staged run boxes shell commands.
+  const pfBoxOnly = await preflight(async (a) => a.includes('--version') ? { code: 0, stdout: 'v', stderr: '' }
+    : a.join(' ').includes('command -v')
+      ? { code: 0, stdout: a[0] === 'bwrap' ? 'MISSING:rg' : '', stderr: '' }
+      : { code: 0, stdout: '', stderr: '' }, root, true);
+  ok(/rg unavailable to sandboxed shell commands/.test(pfBoxOnly.toolsWarning ?? '') &&
+    !/grep tool will fail/.test(pfBoxOnly.toolsWarning ?? '') && !/probed on the host/.test(pfBoxOnly.toolsWarning ?? ''),
+    'preflight: box-only rg gap is scoped to sandboxed shell commands, no host claim');
   probeSeen.length = 0;
   const pfHost = await preflight(pfFake('MISSING:rg\nMISSING:python3'), root, false);
   ok(/rg unavailable/.test(pfHost.toolsWarning ?? '') && /python3 unavailable/.test(pfHost.toolsWarning ?? '') &&
