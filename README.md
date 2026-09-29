@@ -239,8 +239,8 @@ retry. For write and extension risks, see [the safety boundary](#the-writer-and-
 
 Built on Pi's public SDK. The following are design influences, not dependencies:
 
-- **[tcclaviger (Rob)](https://blog.robai.net/vllmdocs/)** — suggested using bubblewrap (`bwrap`) for the writer sandbox.
 - **`@tintinweb/pi-subagents`** — the swarm's first working form ran on top of it; none of its code is in this package.
+- **[tcclaviger (Rob)](https://blog.robai.net/vllmdocs/)** — suggested using bubblewrap (`bwrap`) for the writer sandbox.
 - Blackboard architecture for LLM agent teams: arXiv [2507.01701](https://arxiv.org/abs/2507.01701), [2510.01285](https://arxiv.org/abs/2510.01285).
 - *Why Do Multi-Agent LLM Systems Fail?* (MAST), arXiv [2503.13657](https://arxiv.org/abs/2503.13657) — the failure taxonomy behind the `done`/`blocked` protocol and the independent harvest.
 - Cognition, [*Don't Build Multi-Agents*](https://cognition.ai/blog/dont-build-multi-agents) — peers exchange artifacts and traces, not conversation.
