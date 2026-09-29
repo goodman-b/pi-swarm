@@ -26,10 +26,13 @@ export const DEFAULTS = {
   grants: {} as Record<string, Grant | null>,
 };
 export type Settings = typeof DEFAULTS;
+// Structural JS array-length bound (2^32-1): the largest roster an array of peers can hold.
+// NOT a recommended scale - the roster is allocated upfront, so practical counts stay far lower.
+export const MAX_PEERS = 2 ** 32 - 1;
 const ranges = {
-  // No hardcoded ceiling on peer/concurrency counts (issue #5): any safe integer at or
-  // above the floor. High counts are configurable, not a verified scale guarantee.
-  defaultAgents: [2, Number.MAX_SAFE_INTEGER], maxAgents: [2, Number.MAX_SAFE_INTEGER], peerMaxTurns: [1, 500], maxConcurrent: [1, Number.MAX_SAFE_INTEGER],
+  // No hardcoded 16 ceiling on peer counts (issue #5), but the roster keys stop at the
+  // structural array bound above. Concurrency is queue admission, not memory: safe integers.
+  defaultAgents: [2, MAX_PEERS], maxAgents: [2, MAX_PEERS], peerMaxTurns: [1, 500], maxConcurrent: [1, Number.MAX_SAFE_INTEGER],
   harvestMaxTurns: [1, 100], reduceMaxTurns: [1, 100], graceTurns: [0, 10], wallSeconds: [10, 14400], refreshMs: [250, 60000],
   runTokenCap: [0, 100_000_000],
 } as const;
