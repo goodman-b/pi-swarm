@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.2
+
+- **Tool preflight.** Before any session starts, pi-swarm probes the tools peers depend on in
+  the environment that will actually use them: the host (peer `grep`/`find`/`ls`/`read` run
+  there in every mode) and, for a staged `apply` run, the sandbox as well. Resolution mirrors
+  Pi's own - the agent bin dir before `PATH` - so a bundled `rg` is not falsely rejected.
+  Results are warnings on the existing sandbox channel, never a launch blocker.
+- **Issue #7 closed:** incomplete peer coverage reporting (0.4.1) plus this preflight.
+- **Discoverability.** Broader npm keywords and a search-oriented description; a new publish
+  also re-triggers npm's search index, which had not been returning this package.
+
+The optional writer still has no recorded live apply smoke, and the sandbox does not mount
+Pi's bin dir, so a staged gate cannot use `rg` - both remain open.
+
 ## 0.4.1
 
 - **Configurable peer limits.** Operators can raise roster and concurrency limits
