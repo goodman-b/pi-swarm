@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1
+
+- **Configurable peer limits.** Operators can raise roster and concurrency limits
+  above 16. Defaults remain 4 peers, a 16-peer launch ceiling and 8 concurrent
+  prompts. Higher counts are opt-in, not a scalability guarantee.
+- **Honest coverage reporting.** Reports, dashboard and completion notifications
+  show peer outcome counts and flag incomplete coverage. The harvest verdict
+  stays separate from execution status; its prompt requires evidence-scoped
+  conclusions and explicit coverage limitations.
+- **Verification and maintenance.** Added offline GitHub CI, a release checklist
+  and regression checks; replaced a timing-sensitive cancellation test with an
+  explicit evidence-ready signal. All 599 offline checks pass; a two-peer local
+  source-inspection smoke completed with an independent harvest.
+
+Executable preflight and budget wrap-up remain future work. The optional writer
+still has no recorded live apply smoke; existing safety limitations remain.
+
 ## 0.4.0 — Initial public release
 
 First public release of pi-swarm. Everything shipped, in one summary:
