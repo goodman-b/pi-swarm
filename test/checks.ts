@@ -1023,5 +1023,71 @@ try {
       'the hung spawn is recorded as a failed phase, so the run still settles with a report');
   }
 
+  // issue7 Task A: explicit per-state peer counts, one shared helper, peer-* roster only.
+  {
+    const { peerCounts, peerCountsLine } = await import('../runtime.ts');
+    const mk = (over: Record<string, string>, n = 4) => {
+      const out = Array.from({ length: n }, (_, i) => ({ name: `peer-${i + 1}`, state: 'done' as string }));
+      for (const [name, state] of Object.entries(over)) {
+        const i = out.findIndex(p => p.name === name);
+        if (i >= 0) out[i].state = state; else out.push({ name, state });
+      }
+      return out;
+    };
+    const c = peerCounts(mk({ 'peer-2': 'aborted', 'peer-3': 'failed', harvest: 'done', reduce: 'done' }));
+    ok(c.done === 2 && c.aborted === 1 && c.failed === 1 && c.blocked === 0 && c.unfinished === 0 && c.total === 4,
+      'peerCounts splits done/aborted/failed/blocked/unfinished over the peer roster only');
+    const h = peerCounts(mk({ harvest: 'done', reduce: 'failed', 'peer-4': 'running' }));
+    ok(h.total === 4 && h.done === 3 && h.unfinished === 1 && h.failed === 0, 'harvest and reduce never count, a live peer is unfinished');
+    ok(peerCounts([]).total === 0, 'an empty roster counts as zero, not an error');
+    ok(peerCountsLine(mk({ 'peer-2': 'aborted', 'peer-3': 'failed' })) === 'Peers: 2/4 done · 1 aborted · 1 failed · 0 blocked · 0 unfinished',
+      'peerCountsLine renders the shared count line verbatim');
+    // The legacy-board roster floor: fewer recorded peers than launched must not misreport 0.
+    ok(peerCounts([], 99).total === 99 && peerCounts([], 99).unfinished === 99,
+      'an empty legacy roster falls back to the launched count as unfinished');
+    const rec = peerCounts(mk({ 'peer-2': 'aborted' }), 4);
+    ok(rec.total === 4 && rec.done === 3 && rec.aborted === 1 && rec.unfinished === 0, 'a roster floor at the recorded total is ignored, not padded');
+    const { overviewLines } = await import('../view.ts');
+    const run2 = (over: Record<string, string>, phase: string) => ({
+      id: 'x', session: 's', dir: root, cwd: '', goal: 'g', done: '', phase, state: phase === 'settled' ? 'aborted' : 'running', model: '',
+      started: 0, ended: phase === 'running' ? undefined : 0, metGoal: true, peers: mk(over),
+    } as any);
+    const lines = overviewLines(run2({ 'peer-2': 'aborted', 'peer-3': 'failed' }, 'settled'), { goal: '', events: [], claims: [], peers: [], findings: 0, collisions: 0, roster: 0 } as any);
+    ok(lines[0].includes('INCOMPLETE') && lines[1] === 'Peers: 2/4 done · 1 aborted · 1 failed · 0 blocked · 0 unfinished',
+      'dashboard overview flags a terminal run with nondone peers incomplete and shows the full count line');
+    const full = overviewLines(run2({}, 'settled'), { goal: '', events: [], claims: [], peers: [], findings: 0, collisions: 0, roster: 0 } as any);
+    ok(!full.some(l => l.includes('INCOMPLETE')), 'a fully done run is not flagged incomplete');
+    const live = overviewLines(run2({ 'peer-1': 'running', 'peer-2': 'queued' }, 'running'), { goal: '', events: [], claims: [], peers: [], findings: 0, collisions: 0, roster: 0 } as any);
+    ok(!live.some(l => l.includes('INCOMPLETE')) && live[1] === 'Peers: 2/4 done · 0 aborted · 0 failed · 0 blocked · 2 unfinished',
+      'a live run with queued/running peers is not flagged incomplete while still running');
+    const legacy = overviewLines({ ...run2({}, 'legacy board'), peers: [] } as any, { goal: '', events: [], claims: [], peers: [], findings: 0, collisions: 0, roster: 99 } as any);
+    ok(legacy[1] === 'Peers: 0/99 done · 0 aborted · 0 failed · 0 blocked · 99 unfinished',
+      'a legacy board falls back to the event roster (Math.max) instead of misreporting 0');
+    const legacyDone = overviewLines({ ...run2({ 'peer-2': 'aborted', 'peer-3': 'failed', 'peer-4': 'blocked' }, 'legacy board') } as any, { goal: '', events: [], claims: [], peers: [], findings: 0, collisions: 0, roster: 4 } as any);
+    ok(legacyDone[0].includes('INCOMPLETE') && legacyDone[1] === 'Peers: 1/4 done · 1 aborted · 1 failed · 1 blocked · 0 unfinished',
+      'a legacy board with blocked peers is also flagged incomplete');
+    // persisted REPORT.md evidence: reuse the wall run (peers aborted, harvest verified) and
+    // a one-failed-peer run; metGoal stays the harvest's own verdict.
+    ok(readFileSync(wall.run!.report!, 'utf8').includes('· INCOMPLETE') && /Peers: 0\/2 done · 2 aborted/.test(readFileSync(wall.run!.report!, 'utf8'))
+      && readFileSync(wall.run!.report!, 'utf8').includes('Goal met: true'),
+      'the persisted report flags INCOMPLETE and counts the aborted peers while keeping the harvest verdict');
+    const failedRun = new SR(creator(async (spec, fake) => {
+      if (spec.mode === 'peer') { if (spec.name === 'peer-1') throw new Error('peer boom'); await success(spec, fake); return; }
+      spec.verdict(true, 'rest verified');
+    }), async () => '');
+    failedRun.start({ ...launch, runId: 'issue7-failed' }, s, 'session', root);
+    await failedRun.completion;
+    const repF = readFileSync(failedRun.run!.report!, 'utf8');
+    ok(/Peers: 1\/2 done/.test(repF) && / 1 failed /.test(repF) && repF.includes('INCOMPLETE') && failedRun.run!.metGoal === true
+      && /did not finish: peer-1/.test(failedRun.run!.error ?? ''),
+      'a failed peer is counted as failed (not done, not silent) and named on the record');
+    const repA = readFileSync(r.run!.report!, 'utf8');
+    ok(r.run!.state === 'done' && !repA.includes('INCOMPLETE') && repA.includes('Peers: 2/2 done · 0 aborted · 0 failed · 0 blocked · 0 unfinished'),
+      'an all-done run shows a complete count line with no incomplete flag');
+    const hp = wall.run!.peers.length >= 0 ? made.find(m => m.prompts.some(p => /Peer execution:/.test(p))) : undefined;
+    ok(!!hp && /MAY be independently verified/.test(hp!.prompts.find(p => /Peer execution:/.test(p))!),
+      'the harvest prompt allows independent verification of partial peer evidence, without forbidding it');
+  }
+
   console.log(`PASS: ${checks} offline checks; no sessions/models launched`);
 } finally { rmSync(root, { recursive: true, force: true }); }
