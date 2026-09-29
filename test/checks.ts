@@ -436,6 +436,18 @@ try {
   await handlers.session_shutdown();
   ok((await runGate('printf pass', root, new AbortController().signal)) === 'pass', 'gate executes locally');
   await assert.rejects(() => runGate('false | true', root, new AbortController().signal)); checks++;
+  // The exact regression: pi's bash tool RESOLVES on non-zero exit (isError:true) and only throws
+  // on timeout. runGate mapped content->text and returned, so every failing gate read as a pass and
+  // promote() wrote the staged tree over the workspace - shipped in v0.4.0. This pins the exit-code
+  // half on the local (unsandboxed) path, which works on any host.
+  await assert.rejects(() => runGate('false', root, new AbortController().signal)); checks++;
+  await assert.rejects(() => runGate('exit 9', root, new AbortController().signal)); checks++;
+
+  // The apply-path seam (real runGate wired into a real SwarmRuntime promote) is NOT covered here.
+  // An attempt is kept in projects/swarm notes: on this host the reducer's staged write and the
+  // bwrap gate box do not agree, so the pair passed vacuously - a gate that never ran looks
+  // exactly like a gate that rejected. Until that is settled, the exit-code assertions above are
+  // the pin: they exercise the same resolve-vs-throw behaviour the bug lived in, unsandboxed.
 
   // == toolkit capabilities, sandbox argv, preflight, staging wiring
   const { resolveToolkit, parentInventory, toolkitPrompt, GRANTABLE } = await import('../capabilities.ts');
