@@ -1,9 +1,9 @@
 {
   "name": "@goodman-b/pi-swarm",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "license": "MIT",
-  "description": "Board-coordinated self-organising peer swarm for Pi; no subagent profiles or workflow dependency",
+  "description": "Multi-agent swarm for the pi coding agent: board-coordinated peers, an independent harvest verifier, and an optional sandboxed writer. pi extension",
   "author": "goodman-b",
   "repository": {
     "type": "git",
@@ -17,8 +17,16 @@
   "keywords": [
     "pi-package",
     "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "extension",
     "swarm",
-    "multi-agent"
+    "multi-agent",
+    "subagents",
+    "agents",
+    "orchestration",
+    "parallel-agents",
+    "shared-board"
   ],
   "engines": {
     "node": ">=22.19.0"
