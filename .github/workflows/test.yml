@@ -1,0 +1,21 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: npm install --global @earendil-works/pi-coding-agent@0.87.1
+      - run: npm test
