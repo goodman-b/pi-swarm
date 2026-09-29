@@ -24,6 +24,32 @@ export const markOpaqueUpper = (d: string) => {
 };
 
 export type State = 'queued' | 'running' | 'done' | 'blocked' | 'failed' | 'aborted';
+// Non-peer roles: the independent verifier and the single writer. Counting the harvest would
+// make every run with a done harvest "complete". Preserve arbitrary legacy peer names.
+const NON_PEER_NAMES = new Set(['harvest', 'reduce']);
+/** Per-state counts over the peer roster only. `roster` is a floor for the total (a legacy
+ * board may have fewer recorded peers than the launched roster); the shortfall is unfinished.
+ * The report, notification and dashboard all render from this one shape. */
+export function peerCounts(peers: { name: string; state: string }[], roster = 0): { done: number; aborted: number; failed: number; blocked: number; unfinished: number; total: number } {
+  const c = { done: 0, aborted: 0, failed: 0, blocked: 0, unfinished: 0 };
+  let total = 0;
+  for (const p of peers) {
+    if (NON_PEER_NAMES.has(p.name)) continue;
+    total++;
+    if (p.state === 'done') c.done++;
+    else if (p.state === 'aborted') c.aborted++;
+    else if (p.state === 'failed') c.failed++;
+    else if (p.state === 'blocked') c.blocked++;
+    else c.unfinished++;
+  }
+  const grand = Math.max(total, roster);
+  return { ...c, unfinished: c.unfinished + Math.max(0, grand - total), total: grand };
+}
+/** One-line rendering, e.g. `Peers: 3/4 done · 0 aborted · 1 failed · 0 blocked · 0 unfinished`. */
+export function peerCountsLine(peers: { name: string; state: string }[], roster = 0): string {
+  const c = peerCounts(peers, roster);
+  return `Peers: ${c.done}/${c.total} done · ${c.aborted} aborted · ${c.failed} failed · ${c.blocked} blocked · ${c.unfinished} unfinished`;
+}
 /** Peer spend only - the harvest's or reducer's own tokens must never count toward stopping peers. */
 export function runTokens(peers: { name: string; tokens: number }[]): number {
   return peers.filter(p => p.name.startsWith('peer-')).reduce((n, p) => n + p.tokens, 0);
@@ -303,11 +329,17 @@ export class SwarmRuntime {
       this.phaseOwned = 'harvest'; arm(s.wallSeconds);   // the harvest gets its own wall, not an unbounded run
       let verdict: { metGoal: boolean; summary: string } | undefined;
       const harvest = this.record(run, 'harvest');
+      const counts = peerCounts(peers);
       await this.worker(run, harvest, a, s, board, 'harvest',
         `GOAL\n${a.goal}\nDONE\n${a.done}\nRead ${join(run.dir, 'board.jsonl')} and lanes/*.md.
 Independently re-derive headline findings from source. Agreement is not evidence.
 Record unresolved conflicts, missing artifacts and coverage. You may not modify the target.
-Call swarm_verdict with metGoal and a detailed summary. Be honest about blocked/failed peers.
+Peer execution: ${JSON.stringify(counts)}; peers without a terminal outcome are UNFINISHED.
+Scope every conclusion to evidence you actually verified, and state the coverage limits explicitly:
+never infer general robustness from the selected checks. Partial peer evidence from aborted, failed
+or blocked peers MAY be independently verified by you against source before being relied on, but
+work by an unfinished peer has no outcome on the record and is not verified. Call swarm_verdict
+with metGoal and a detailed summary.
 Peer outcomes: ${JSON.stringify(peers.map(p => ({ name: p.name, state: p.state, error: p.error })))}`,
         (metGoal, summary) => { verdict = { metGoal, summary }; }, staging);
       if (this.stopped) throw new Error(run.error || 'Cancelled');
@@ -388,7 +420,9 @@ A machine gate will run after you finish: ${a.reduceGate}`, undefined, staging);
       if (report.startsWith('No harvest report')) report = boardDigest(board.dir);
       try {
         run.report = join(run.dir, 'REPORT.md');
-        writeFileSync(run.report, `# Swarm ${run.id}\n\nExecution: ${run.state}\nGoal met: ${run.metGoal ?? false}\n${run.error ?? ''}\n\n${report}\n`, { mode: 0o600 });
+        const counts = peerCounts(run.peers);
+        const incomplete = counts.unfinished + counts.failed + counts.aborted + counts.blocked;
+        writeFileSync(run.report, `# Swarm ${run.id}\n\nExecution: ${run.state}${incomplete ? ' · INCOMPLETE' : ''}\nGoal met: ${run.metGoal ?? false}\n${peerCountsLine(run.peers)}\n${run.error ?? ''}\n\n${report}\n`, { mode: 0o600 });
         this.save(run);
       } catch (e: any) { run.state = 'failed'; run.metGoal = false; run.error = `Could not persist final state: ${e.message}`; }
       try { this.settled(run); } catch { /* session can already be torn down */ }

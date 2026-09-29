@@ -4,6 +4,7 @@ import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@ea
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { boardOverview, type DisplayRun, type BoardOverview } from './history.ts';
 import { GRANTABLE } from './capabilities.ts';
+import { peerCounts } from './runtime.ts';
 import type { Settings } from './settings.ts';
 
 export const clean = (s: unknown) => String(s ?? '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' ').replace(/\t/g, '    ');
@@ -78,11 +79,16 @@ export function toolkitLines(r: DisplayRun): string[] {
   return out;
 }
 export function overviewLines(r: DisplayRun, b: BoardOverview): string[] {
-  const peers = r.peers.filter(p => !['harvest', 'reduce'].includes(p.name));
   const first = b.events.find(e => e.kind === 'claim' && typeof e.ts === 'number');
+  // A legacy board carries no run.json: its roster is what the board events record
+  // (the original Math.max(peers, b.roster) fallback that used to live inline here).
+  const c = peerCounts(r.peers, r.phase === 'legacy board' ? b.roster : 0);
+  // INCOMPLETE only after a terminal run - a live run with queued/running peers must not look failed.
+  const terminal = r.phase === 'settled' || r.phase === 'legacy board';
+  const incomplete = terminal && c.unfinished + c.failed + c.aborted + c.blocked > 0;
   return [
-    `Status: ${oneLine(r.phase)} / ${oneLine(r.state)}`,
-    `${Math.max(peers.length, b.roster)} peers · ${peers.filter(p => p.state === 'done').length} done · ${peers.filter(p => p.state === 'blocked').length} blocked`,
+    `Status: ${oneLine(r.phase)} / ${oneLine(r.state)}${incomplete ? ' · INCOMPLETE' : ''}`,
+    `Peers: ${c.done}/${c.total} done · ${c.aborted} aborted · ${c.failed} failed · ${c.blocked} blocked · ${c.unfinished} unfinished`,
     `${b.findings} findings · ${b.collisions} collisions · ${b.claims.length} held claims`,
     ...(first && Number.isFinite(first.ts) ? [`First claim: ${Math.max(0, Math.round((first.ts * 1000 - r.started) / 1000))}s`] : []),
     `Model: ${oneLine(r.model || 'not recorded')} · goal verified: ${r.metGoal === undefined ? 'unknown / pending' : r.metGoal ? 'yes' : 'no'}`,

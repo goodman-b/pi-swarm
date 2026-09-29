@@ -8,7 +8,7 @@ import { preflight } from './sandbox.ts';
 import { component } from './board.ts';
 import { swarmCommand } from './commands.ts';
 import { loadSettings, saveSettings, drainDiagnostics, settingsPath, MAX_PEERS } from './settings.ts';
-import { SwarmRuntime, validateLaunch, type Launch, type Run } from './runtime.ts';
+import { SwarmRuntime, validateLaunch, peerCounts, peerCountsLine, type Launch, type Run } from './runtime.ts';
 import { prepareSDK, runGate } from './sdk.ts';
 import { displayRun, type DisplayRun } from './history.ts';
 
@@ -73,7 +73,7 @@ export default function swarm(pi: ExtensionAPI) {
       if (closing || current !== generation) return;
       if (ctx.hasUI) ctx.ui.setWidget('swarm', undefined);
       if (settings.notifyOnSettle) pi.sendMessage({ customType: 'swarm-result',
-        content: `${summary(r)}\nGoal met: ${r.metGoal ?? false}\nReport: ${r.report ?? r.dir}\n${r.error ?? ''}\n${r.sandbox?.warning ? `Sandbox: ${r.sandbox.warning}\n` : ''}Use swarm_status for details.`,
+        content: `${summary(r)}\n${peerCountsLine(r.peers)}${peerCounts(r.peers).done < peerCounts(r.peers).total ? ' · INCOMPLETE: not all peers finished' : ''}\nGoal met: ${r.metGoal ?? false}\nReport: ${r.report ?? r.dir}\n${r.error ?? ''}\n${r.sandbox?.warning ? `Sandbox: ${r.sandbox.warning}\n` : ''}Use swarm_status for details.`,
         display: true, details: compact(r),
       }, { triggerTurn: true, deliverAs: 'followUp' });
     }, async () => pf, () => resolved);
