@@ -1,6 +1,6 @@
 {
   "name": "@goodman-b/pi-swarm",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "license": "MIT",
   "description": "Board-coordinated self-organising peer swarm for Pi; no subagent profiles or workflow dependency",
