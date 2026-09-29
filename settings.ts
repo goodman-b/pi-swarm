@@ -15,9 +15,15 @@ export function settingsLocked(): boolean { return unreadable; }
 export const DEFAULTS = {
   defaultAgents: 4, maxAgents: 16, defaultModel: '', defaultEffort: 'low',
   peerMaxTurns: 80, harvestMaxTurns: 30, reduceMaxTurns: 30, graceTurns: 3, wallSeconds: 3600, maxConcurrent: 8,
-  // 1M for the WHOLE run (not per peer): a 4-peer audit of a ~1800-line package measured
-  // 65k-130k per peer, so a 4-peer run lands around 300-500k. At 256k the cap cut 4-of-4
-  // peers with zero lane files and the harvest had to re-derive everything from source.
+  // For the WHOLE run (not per peer). Size it from the LANE, not the roster - the two known
+  // lane shapes differ by 40x:
+  //   audit/read-only sweep of a ~1800-line package: 65k-130k per peer (4 peers -> 300-500k)
+  //   evidence-verification lane that must re-read canonical docs and emit file:line quotes:
+  //   4.6M-5.1M per peer (measured 2026-09-29, 6-peer run sw-4b4b7313)
+  // At 256k the cap cut 4-of-4 audit peers with zero lane files. At 12M it cut 5-of-6
+  // verification peers with one lane file, and the harvest re-derived everything from source -
+  // the same failure at a different scale. Under-sizing looks like a peer problem; check the
+  // per-peer share before blaming a peer for thrashing.
   // The wall clock is the better lever for runaway runs; this is a backstop, not a throttle.
   runTokenCap: 1_000_000,
   boardRoot: join(homedir(), '.pi', 'swarm-boards'),

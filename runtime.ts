@@ -657,7 +657,17 @@ A machine gate will run after you finish: ${a.reduceGate}`, undefined, staging);
           p.cost += e.message.usage?.cost?.total ?? 0;
           // Spend is the limit wall time cannot see: a run can burn millions of tokens in a
           // few turns, or none at all while queued. Stop the peers, keep the harvest.
-          if (mode === 'peer' && settings.runTokenCap > 0 && runTokens(run.peers) > settings.runTokenCap) this.stopPeers('Run token budget reached');
+          if (mode === 'peer' && settings.runTokenCap > 0 && runTokens(run.peers) > settings.runTokenCap) {
+            // Name the shortfall. "Budget reached" alone reads like a peer misbehaving; what an
+            // operator needs is whether the run was 10% short or 3x short, i.e. resize the cap
+            // or shrink the roster. Per-peer share is the number that sizes the next run.
+            const n = run.peers.filter(q => q.name.startsWith('peer-')).length || 1;
+            const spent = runTokens(run.peers);
+            this.stopPeers(`Run token budget reached (spent ${(spent / 1e6).toFixed(1)}M of ` +
+              `${(settings.runTokenCap / 1e6).toFixed(1)}M cap; ${(spent / n / 1e6).toFixed(1)}M per ` +
+              `peer across ${n}). If lanes needed more, raise the cap - a peer cut mid-work is an ` +
+              `under-sized run, not a thrashing one.`);
+          }
         }
         if (e.type === 'turn_end') {
           p.turns++;
