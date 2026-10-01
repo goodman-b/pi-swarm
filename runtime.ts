@@ -284,7 +284,8 @@ export class SwarmRuntime {
       // stopPhase() records phaseRetry and stands down; worker() honours that the moment the
       // session registers. Re-arming in a loop instead would spin a timer forever against a
       // create() that never returns.
-      timer = setTimeout(() => this.stopPhase(), seconds * 1000);
+      // 0 = wall off: the run is bounded by runTokenCap and peerMaxTurns only.
+      timer = seconds > 0 ? setTimeout(() => this.stopPhase(), seconds * 1000) : undefined;
     };
     const disarm = () => { if (timer) clearTimeout(timer); timer = undefined; };
     // ponytail: the phase wall reuses the peer stop path - it is the only stopping mechanism
@@ -607,7 +608,7 @@ A machine gate will run after you finish: ${a.reduceGate}`, undefined, staging);
       let spawnTimer: ReturnType<typeof setTimeout> | undefined;
       const guard = new Promise<never>((_, rej) => {
         if (signal.aborted) return rej(new Error(run.error || 'Cancelled during spawn'));
-        if (!owned) return;
+        if (!owned || settings.wallSeconds <= 0) return;   // wall off: no spawn deadline
         spawnTimer = setTimeout(() => {
           this.phaseRetry = false; this.phaseOwned = 'none';
           // State the reason on the run: stopPhase() could not, because at this instant the

@@ -115,13 +115,15 @@ see staged state.
 - `peerMaxTurns` (80) stops one peer spinning on its own slice — blind to
   queueing and turn cost.
 - `wallSeconds` (3600) is a **per-phase** deadline — peer, harvest and reduce
-  each get a fresh budget. Reaching the peer deadline stops peers but lets
-  harvest run. If harvest cannot finish, a deterministic board digest remains.
+  each get a fresh budget. `0` turns the wall off. Reaching the peer deadline
+  stops peers but lets harvest run. If harvest cannot finish, a deterministic
+  board digest remains.
   Local turns cost ~20–45 s, so size it for the queue: `peers / maxConcurrent`
   waves × expected turns × per-turn latency.
 - `runTokenCap` (1,000,000) is a **stop trigger on aggregate peer usage**,
   checked at message boundaries — **not a hard whole-run cap**: harvest and
-  writer spend is extra, and in-flight work can overshoot the threshold. A
+  writer spend is extra, and in-flight work can overshoot the threshold. `0`
+  turns it off; with both budgets `0`, only `peerMaxTurns` stops a run. A
   cut-short run settles `aborted` and names the unfinished peers, without
   reporting a verified goal as unmet.
 - Budgets are re-read at the start of each run (a `~/.pi/swarm.json` edit
@@ -178,7 +180,7 @@ to save** until fixed. `SWARM_SETTINGS_PATH` overrides the path.
 | `defaultModel` / `defaultEffort` | *(the calling session's model)* / low |
 | `peerMaxTurns` / `harvestMaxTurns` / `reduceMaxTurns` / `graceTurns` | 80 / 30 / 30 / 3 |
 | `maxConcurrent` | 8 — peer sessions prompting at once; the rest queue |
-| `wallSeconds` | 3600 — per-phase deadline (§ Budgets) |
+| `wallSeconds` | 3600 — per-phase deadline, 0 = off (§ Budgets) |
 | `runTokenCap` | 1000000 — aggregate peer-usage stop trigger (0 = off); harvest/writer spend excluded, in-flight turns may overshoot |
 | `boardRoot` | `~/.pi/swarm-boards` |
 | `widget` / `notifyOnSettle` | true / true |

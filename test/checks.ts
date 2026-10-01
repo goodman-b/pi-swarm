@@ -291,6 +291,17 @@ try {
     'the wall cap stops peers, marks them aborted, and the harvest still writes a report and keeps its verdict');
   ok(wall.run.limits?.wallSeconds === 0.3 && wall.run.limits?.peerMaxTurns === s.peerMaxTurns,
     'the limits actually in force are recorded on the run');
+  // wallSeconds 0 = wall OFF (runTokenCap 0 = off already; both 0 = only turns stop the run).
+  // Before the fix, setTimeout(0) armed a wall that fired on the next tick and aborted peers.
+  const noWall = new SwarmRuntime(creator(async (spec, fake) => {
+    if (spec.mode === 'peer') { await new Promise(r => setTimeout(r, 50)); await spec.board('artifact', 'evidence'); await spec.board('done', 'checked'); }
+    else await success(spec, fake);
+  }), async () => '');
+  noWall.start({ ...launch, runId: 'wall-off' }, { ...s, wallSeconds: 0, runTokenCap: 0 }, 'session', root);
+  await noWall.completion;
+  ok(noWall.run?.state === 'done' && !noWall.run.error
+    && noWall.run.peers.filter(p => p.name.startsWith('peer-')).every(p => p.state === 'done'),
+    'wallSeconds 0 disables the wall; a slow peer finishes instead of being aborted');
   // The same wall, firing while the harvest is the only live session: the phase that turns
   // the board into a report must never be aborted by a peer-phase deadline.
   // v0.3.2 fix 4: the harvest gets its OWN wall, armed fresh after the peers settle - not the

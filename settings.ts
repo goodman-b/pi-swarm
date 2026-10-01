@@ -39,7 +39,7 @@ const ranges = {
   // No hardcoded 16 ceiling on peer counts (issue #5), but the roster keys stop at the
   // structural array bound above. Concurrency is queue admission, not memory: safe integers.
   defaultAgents: [2, MAX_PEERS], maxAgents: [2, MAX_PEERS], peerMaxTurns: [1, 500], maxConcurrent: [1, Number.MAX_SAFE_INTEGER],
-  harvestMaxTurns: [1, 100], reduceMaxTurns: [1, 100], graceTurns: [0, 10], wallSeconds: [10, 14400], refreshMs: [250, 60000],
+  harvestMaxTurns: [1, 100], reduceMaxTurns: [1, 100], graceTurns: [0, 10], wallSeconds: [0, 14400], refreshMs: [250, 60000],
   runTokenCap: [0, 100_000_000],
 } as const;
 export const EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
