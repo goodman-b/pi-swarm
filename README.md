@@ -231,7 +231,7 @@ existence is checked at launch; `null` removes an entry; names match
 Node ≥ 22.19, Python 3 on PATH (the board binary is invoked with argv, never
 through a shell), `bwrap` only for `apply: true`. `npm test` runs against
 whatever Pi SDK it finds and prints it first as `pi SDK <version> — <path>`, so
-a green run always says which Pi it means (CI pins 0.87.1); `toolkit: "inherit"`
+a green run always says which Pi it means (CI pins 1.5.0, the release this fleet runs); `toolkit: "inherit"`
 additionally needs a Pi build exposing
 `getAllTools()`/`getCommands()`, else a named launch error.
 

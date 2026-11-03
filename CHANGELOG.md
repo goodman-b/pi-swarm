@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **CI tests the Pi this fleet runs.** The workflow pinned `@earendil-works/pi-coding-agent
+  @0.87.1` while hosts run 1.5.0, so a CI green and a local green meant different things.
+  Pinned to 1.5.0; the offline suite passes there (270 + 251 + 91 checks).
+
 - **Offline suite runs where `pi` is not the CLI.** `test/run.mjs` resolved the SDK through
   `which pi`, which fails twice over on a managed install: a minimal `PATH` (a detached job,
   a CI runner) has no `pi` at all, and the `pi` a shell finds is the launcher wrapper, whose
