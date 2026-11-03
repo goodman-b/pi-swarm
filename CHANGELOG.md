@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Offline suite runs where `pi` is not the CLI.** `test/run.mjs` resolved the SDK through
+  `which pi`, which fails twice over on a managed install: a minimal `PATH` (a detached job,
+  a CI runner) has no `pi` at all, and the `pi` a shell finds is the launcher wrapper, whose
+  directory cannot `require('jiti')`. It now prefers the release bin under
+  `PI_MANAGED_INSTALL_ROOT` (or `<agentDir>/install`) and keeps `PI_CLI` as the override.
+
 ## 0.4.2
 
 - **Tool preflight.** Before any session starts, pi-swarm probes the tools peers depend on in
