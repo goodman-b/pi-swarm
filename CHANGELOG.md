@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **First live writer smoke.** `sw-f8dfb540` (2026-11-04) ran reduce → gate → promote for
+  real: a staged one-line fix in a fixture repo, `gate.txt` holding `node test.mjs`'s own
+  output, and a promoted workspace diff of exactly that line. Recipe and the goal-framing
+  trap are in the README. The sandbox still does not mount Pi's bin dir, so a staged gate
+  cannot use `rg` — use `grep`/`node` in gates until that changes.
+
 - **CI tests the Pi this fleet runs.** The workflow pinned `@earendil-works/pi-coding-agent
   @0.87.1` while hosts run 1.5.0, so a CI green and a local green meant different things.
   Pinned to 1.5.0; the offline suite passes there (270 + 251 + 91 checks).
@@ -26,8 +32,7 @@
 - **Discoverability.** Broader npm keywords and a search-oriented description; a new publish
   also re-triggers npm's search index, which had not been returning this package.
 
-The optional writer still has no recorded live apply smoke, and the sandbox does not mount
-Pi's bin dir, so a staged gate cannot use `rg` - both remain open.
+The sandbox does not mount Pi's bin dir, so a staged gate cannot use `rg` - still open.
 
 ## 0.4.1
 

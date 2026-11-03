@@ -137,6 +137,12 @@ goal — otherwise `apply` is skipped with a stated reason. Peers never get
 the built-in `bash` tool; the writer session (called **reduce** in run
 records) gets a sandboxed shell. Extension tools remain outside that sandbox.
 
+Write the goal as a **diagnosis**, not a fix. A peer told to "fix it" discovers it
+cannot write, posts `blocked` and releases its claim (seen live in `sw-5ff5cc23`);
+one unfinished peer is enough for harvest to withhold verification, and `apply` is
+then skipped and the workspace left untouched. The writer is the only session that
+changes files, and it acts only on what the harvest verified.
+
 `bwrap` with `--unshare-all` — network unshared, and deliberately **no**
 `--share-net` path in the code — plus read-only `/usr`, fresh
 `/proc`/`/dev`/`tmpfs /tmp`, the workspace as an overlay with writes going to
@@ -247,7 +253,16 @@ actions); grants use in-repo fixtures, so the suite runs without the
 author's extensions installed. A **live model smoke** — a bounded swarm
 against a real model (peers claim work, harvest settles, effects stay `[]`
 on a read-only run) — is the real proof of the SDK integration, separate
-from `npm test`.
+from `npm test`. The **writer** smoke runs the same way against a throwaway fixture
+repo — a deliberately broken function plus a test that fails on it (the fleet keeps
+one at `../applytest`, outside this package) — driven headlessly so the run's `cwd`
+is the fixture: `cd <fixture> && pi --print --tools 'swarm_*,bash,read'` with a
+brief that calls `swarm_start({agents: 2, apply: true, reduceGate: "node test.mjs"})`
+and polls `swarm_status` until it settles (the run belongs to the session that
+started it, so that session must outlive it). Proof it worked: `gate.txt` in the run
+dir holding the gate's own output, and a workspace diff of nothing but the intended
+line. Recorded: `sw-f8dfb540`, 2026-11-04, ~100k tokens (2 peers + harvest + writer),
+under 4 minutes.
 
 Usage/cost is recorded in `run.json`, **not merged into Pi's `/cost`**;
 compaction overhead may be missing. There is one active run per extension
