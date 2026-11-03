@@ -229,12 +229,16 @@ existence is checked at launch; `null` removes an entry; names match
 ## Requirements and tests
 
 Node ≥ 22.19, Python 3 on PATH (the board binary is invoked with argv, never
-through a shell), `bwrap` only for `apply: true`. Developed and tested against
-Pi 0.87.1; `toolkit: "inherit"` additionally needs a Pi build exposing
+through a shell), `bwrap` only for `apply: true`. `npm test` runs against
+whatever Pi SDK it finds and prints it first as `pi SDK <version> — <path>`, so
+a green run always says which Pi it means (CI pins 0.87.1); `toolkit: "inherit"`
+additionally needs a Pi build exposing
 `getAllTools()`/`getCommands()`, else a named launch error.
 
-`npm test` — no network, no model calls; the runner finds the Pi SDK via
-`pi` on PATH (`PI_CLI=/path/to/pi npm test` otherwise). Fake sessions plus
+`npm test` — no network, no model calls; the runner finds the Pi SDK in
+`$PI_MANAGED_INSTALL_ROOT/releases/<current-version>` (or `~/.pi/agent/install`),
+then `pi` on PATH, and `PI_CLI=/path/to/releases/<v>/node_modules/.bin/pi npm test`
+forces one. Pass the SDK's own bin, not the `pi` launcher script. Fake sessions plus
 the real Pi resource loader and the bundled Python board; covers registration,
 settings, scoped tools, protocol failures, turn/wall caps, cancellation
 including mid-create, steering, claim cleanup, reduce and gate failure, plus

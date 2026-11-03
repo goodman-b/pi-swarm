@@ -5,8 +5,11 @@
 - **Offline suite runs where `pi` is not the CLI.** `test/run.mjs` resolved the SDK through
   `which pi`, which fails twice over on a managed install: a minimal `PATH` (a detached job,
   a CI runner) has no `pi` at all, and the `pi` a shell finds is the launcher wrapper, whose
-  directory cannot `require('jiti')`. It now prefers the release bin under
-  `PI_MANAGED_INSTALL_ROOT` (or `<agentDir>/install`) and keeps `PI_CLI` as the override.
+  directory cannot `require('jiti')`. Candidates are now the release bin under
+  `PI_MANAGED_INSTALL_ROOT` (or `<agentDir>/install`), then `pi` on PATH, with `PI_CLI` as
+  the override; each is rejected unless it sits in a real `pi-coding-agent` package, the one
+  used prints as `pi SDK <version> — <path>` (a green run against some other Pi release is
+  not coverage), and a total miss names everything it tried.
 
 ## 0.4.2
 
