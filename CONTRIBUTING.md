@@ -7,7 +7,8 @@ private code fork. Never commit credentials or runtime artifacts.
 ## Development
 
 Work on a branch in a separate clone or worktree, not a package directory
-currently loaded by Pi. Install Pi 0.87.1, Node ≥ 22.19 and Python 3, then run
+currently loaded by Pi. Install the Pi version CI pins (see `.github/workflows/*.yml`;
+the suite prints the SDK it ran against), Node ≥ 22.19 and Python 3, then run
 `npm test`. The suite is offline and does not call models. GitHub CI runs it
 on pushes to `main` and pull requests.
 

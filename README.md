@@ -137,6 +137,16 @@ goal — otherwise `apply` is skipped with a stated reason. Peers never get
 the built-in `bash` tool; the writer session (called **reduce** in run
 records) gets a sandboxed shell. Extension tools remain outside that sandbox.
 
+> **Upgrade before using `apply` on a published version.** Up to and including 0.4.2 the
+> gate was **fail-open**: Pi's bash tool resolves (it does not throw) on a non-zero exit, and
+> `runGate()` never inspected that flag — so a failing gate read as a pass and the staged
+> tree was promoted anyway. 0.4.3 throws on any non-zero exit and discards staging. Read-only
+> runs never touch the workspace and are not affected. **If you ran `apply: true` on 0.4.2 or
+> earlier:** open the run dir (`~/.pi/swarm-boards/<session>/<run>/`) and look for `gate.txt`.
+> If it is there and ends in `Command exited with code N`, the gate failed and the promoted
+> diff should not have landed — re-check that diff against the workspace. No `gate.txt` means
+> the gate never resolved (it rejected, timed out, or never ran) and nothing was promoted.
+
 Write the goal as a **diagnosis**, not a fix. A peer told to "fix it" discovers it
 cannot write, posts `blocked` and releases its claim (seen live in `sw-5ff5cc23`);
 one unfinished peer is enough for harvest to withhold verification, and `apply` is
@@ -170,8 +180,11 @@ run in-process anyway, outside any box.
   included — passes in the gate.
 - A grant's process-global state (a fetch cache) is shared across sessions in
   this process.
-- **Release status:** the apply/reduce/gate/promote path is unit-tested only;
-  a live apply run promoting to a workspace is not yet on record.
+- **Release status:** the apply/reduce/gate/promote path is unit-tested, and one live
+  writer run is on record: `sw-f8dfb540` (2026-11-04) settled `done` with `metGoal: true`
+  through reduce → gate → promote, promoting a staged one-line fix whose `gate.txt` held the
+  gate command's own output. That run used the canary checkout, not a published version;
+  promotion to a real workspace is still lightly travelled, so treat `apply` accordingly.
 
 ## Settings
 
@@ -236,7 +249,9 @@ existence is checked at launch; `null` removes an entry; names match
 
 Node ≥ 22.19, Python 3 on PATH (the board binary is invoked with argv, never
 through a shell), `bwrap` only for `apply: true`. `npm test` runs against
-whatever Pi SDK it finds and prints it first as `pi SDK <version> — <path>`, so
+whatever Pi SDK it finds — **Pi 1.5.0 or newer**, since the suite pins that release's
+argument-coercion contract and says so plainly on an older SDK — and prints it first as
+`pi SDK <version> — <path>`, so
 a green run always says which Pi it means (CI pins 1.5.0, the release this fleet runs); `toolkit: "inherit"`
 additionally needs a Pi build exposing
 `getAllTools()`/`getCommands()`, else a named launch error.

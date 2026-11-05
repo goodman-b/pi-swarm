@@ -1,25 +1,43 @@
 # Changelog
 
-## Unreleased
+## 0.4.3
 
-- **First live writer smoke.** `sw-f8dfb540` (2026-11-04) ran reduce → gate → promote for
-  real: a staged one-line fix in a fixture repo, `gate.txt` holding `node test.mjs`'s own
-  output, and a promoted workspace diff of exactly that line. Recipe and the goal-framing
-  trap are in the README. The sandbox still does not mount Pi's bin dir, so a staged gate
-  cannot use `rg` — use `grep`/`node` in gates until that changes.
+- **SECURITY: the `apply` gate was fail-open in every published release (0.4.0 – 0.4.2).**
+  Pi's bash tool *resolves* on a non-zero exit (`isError: true`, text `Command exited with
+  code N`) and throws only on timeout. `runGate()` mapped content → text and returned, so
+  **every** failing gate read as a pass, and the caller — which treats resolution as success —
+  promoted the staged tree over the workspace. That is the exact outcome the gate exists to
+  prevent. Fixed by throwing on `isError` so the existing catch discards staging. Pinned by
+  `runGate('false')` / `runGate('exit 9')` rejecting; deleting the guard turns the suite red
+  with "Missing expected rejection". Read-only runs never reach this path. **If you ran
+  `apply: true` on 0.4.2 or earlier, re-check the promoted diff against `gate.txt`.**
 
-- **CI tests the Pi this fleet runs.** The workflow pinned `@earendil-works/pi-coding-agent
-  @0.87.1` while hosts run 1.5.0, so a CI green and a local green meant different things.
-  Pinned to 1.5.0; the offline suite passes there (270 + 251 + 91 checks).
+- **Budget honesty.** A token-cap stop now names the shortfall (`spent 4.3M of 12.0M cap;
+  0.7M per peer across 6`) — "budget reached" alone reads like a misbehaving peer when it is
+  an under-sized run. `wallSeconds: 0` now means the wall is off (bounded by turns and the
+  token cap), and the range allows it.
 
-- **Offline suite runs where `pi` is not the CLI.** `test/run.mjs` resolved the SDK through
-  `which pi`, which fails twice over on a managed install: a minimal `PATH` (a detached job,
-  a CI runner) has no `pi` at all, and the `pi` a shell finds is the launcher wrapper, whose
-  directory cannot `require('jiti')`. Candidates are now the release bin under
-  `PI_MANAGED_INSTALL_ROOT` (or `<agentDir>/install`), then `pi` on PATH, with `PI_CLI` as
-  the override; each is rejected unless it sits in a real `pi-coding-agent` package, the one
-  used prints as `pi SDK <version> — <path>` (a green run against some other Pi release is
-  not coverage), and a total miss names everything it tried.
+- **Tested against the Pi this fleet runs.** CI pinned `pi-coding-agent@0.87.1` while hosts
+  run 1.5.0, so a CI green and a local green meant different things. Pinned to 1.5.0, and
+  `test/run.mjs` resolves the SDK without `which pi` (a detached job or CI runner has no `pi`
+  on PATH; the managed launcher is a shell wrapper outside the package): `PI_CLI` first, then
+  the release bin under `PI_MANAGED_INSTALL_ROOT` (default `~/.pi/agent/install`), then `pi`
+  on PATH — each rejected unless it sits in a real `pi-coding-agent` package, the winner
+  prints `pi SDK <version> — <path>`, and a total miss names every candidate it tried.
+
+- **Pi 1.5.0 argument coercion is pinned, not assumed.** 1.5.0 moved tool-argument validation
+  to `@earendil-works/pi-schema` and validates every tool call with `coerce: true`: a loose
+  `agents: "4"`, `tools: "read"` or `apply: "true"` is **rewritten** before `execute()` sees
+  it. Measured against our registered schema — coercion is type-level only, so `minimum`,
+  `enum` and `maxItems` still reject, and `validateLaunch` still refuses the uncoerced slip.
+  That is why the launch validators are strict type checks (`Number.isInteger`, `Array.isArray`)
+  and stay that way. Checks: 275 + 251 + 91.
+
+- **Changelog surface.** Pi 1.5.0 shows a package's `CHANGELOG.md` on the launch after an
+  update, entries matched on the `## X.Y.Z` heading form we use. Only published versions are
+  ever rendered — a `## Unreleased` heading resets the entry — so keep release notes under a
+  version, and note that `pi.changelogPath` (set to `""` to go silent) is ours to set, not
+  yours.
 
 ## 0.4.2
 
