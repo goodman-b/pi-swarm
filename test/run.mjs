@@ -69,9 +69,14 @@ const { createJiti } = req('jiti');
 // pi-schema is the 1.5.0 argument validator, imported by the coercion check. It ships an
 // import-only export map, so createRequire (require condition) cannot resolve it; and jiti
 // resolves bare specifiers from THIS file, which has no node_modules - hence the explicit alias.
-const piSchema = resolve(sdk, '../../@earendil-works/pi-schema/dist/index.js');
-if (!existsSync(piSchema)) throw new Error(`Pi 1.5.0+ is required to run these checks: no pi-schema next to ${sdk} `
-  + '(the argument-coercion contract cannot be pinned against an older SDK).');
+// Two layouts, and a global npm install is the second one (CI went red learning this): a managed
+// release tree hoists @earendil-works/* next to pi-coding-agent, `npm install -g` nests deps inside it.
+const schemaCandidates = [join(sdk, '../../@earendil-works/pi-schema/dist/index.js'),
+  join(sdk, 'node_modules/@earendil-works/pi-schema/dist/index.js')];
+const piSchema = schemaCandidates.find(existsSync);
+if (!piSchema) throw new Error(`Pi 1.5.0+ is required to run these checks: no pi-schema at `
+  + `\n  ${schemaCandidates.join('\n  ')}\n`
+  + ' (the argument-coercion contract cannot be pinned against an older SDK).');
 const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': resolve(sdk, 'dist/index.js'),
   '@earendil-works/pi-tui': req.resolve('@earendil-works/pi-tui'),
