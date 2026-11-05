@@ -69,13 +69,24 @@ const { createJiti } = req('jiti');
 // pi-schema is the 1.5.0 argument validator, imported by the coercion check. It ships an
 // import-only export map, so createRequire (require condition) cannot resolve it; and jiti
 // resolves bare specifiers from THIS file, which has no node_modules - hence the explicit alias.
-const piSchema = resolve(sdk, '../../@earendil-works/pi-schema/dist/index.js');
-if (!existsSync(piSchema)) throw new Error(`Pi 1.5.0+ is required to run these checks: no pi-schema next to ${sdk} `
-  + '(the argument-coercion contract cannot be pinned against an older SDK).');
+// pi-schema (the 1.5.0 argument validator) is imported by the coercion check AND by pi-ai's
+// validation util. It ships an import-only export map, so createRequire (require condition) cannot
+// resolve it, and jiti resolves bare specifiers from THIS file, which has no node_modules - hence
+// explicit aliases. Two layouts, and a global npm install is the second one (CI went red learning
+// this): a managed release tree hoists @earendil-works/* next to pi-coding-agent, `npm install -g`
+// nests deps inside it. The `/formats` SUBPATH needs its own alias too: jiti appends the subpath to
+// an aliased FILE, which is how a nested install died with `…/dist/index.js/formats` not found.
+const schemaCandidates = [join(sdk, '../../@earendil-works/pi-schema/dist'),
+  join(sdk, 'node_modules/@earendil-works/pi-schema/dist')];
+const schemaRoot = schemaCandidates.find(existsSync);
+if (!schemaRoot) throw new Error('Pi 1.5.0+ is required to run these checks: no pi-schema at '
+  + `\n  ${schemaCandidates.join('\n  ')}\n`
+  + ' (the argument-coercion contract cannot be pinned against an older SDK).');
 const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': resolve(sdk, 'dist/index.js'),
   '@earendil-works/pi-tui': req.resolve('@earendil-works/pi-tui'),
-  '@earendil-works/pi-schema': piSchema,
+  '@earendil-works/pi-schema': resolve(schemaRoot, 'index.js'),
+  '@earendil-works/pi-schema/formats': resolve(schemaRoot, 'formats/index.js'),
   typebox: req.resolve('typebox'),
 }, moduleCache: false });
 try {
