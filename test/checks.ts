@@ -443,6 +443,29 @@ try {
   ok(tools.map(t => t.name).join(',') === 'swarm_start,swarm_status,swarm_steer,swarm_cancel', 'standalone registration without subagent extension');
   ok(tools.find((t: any) => t.name === 'swarm_start').parameters.properties.agents.maximum === MAX_PEERS,
     'swarm_start agents schema ceiling matches the settings ceiling');
+
+  // Pi >= 1.5.0 validates every tool call with compile(schema, {coerce:true}) - a loose argument is
+  // REWRITTEN before execute() sees it, so 'true' can turn into the write-path flag. Pin the contract
+  // on our real registered schema, and pin that validateLaunch still refuses the uncoerced slip.
+  const { compile } = await import('@earendil-works/pi-schema');
+  const startSchema = tools.find((t: any) => t.name === 'swarm_start').parameters;
+  const coerceArgs = (args: any) => compile(startSchema, { coerce: true, unresolvedRefs: 'reject' }).parse(structuredClone(args));
+  // shortcut: this mirrors pi-agent-core's validateToolArguments call rather than calling it, because
+  // that helper is not exported to extensions. If Pi ever drops coerce:true, these assertions still
+  // hold while the harness contract changes - re-read pi-ai's validation util on every Pi major.
+  const goal = { goal: 'g', done: 'd' };
+  const coerced = coerceArgs({ ...goal, agents: '4', tools: 'read', apply: 'true' });
+  ok(coerced.ok && coerced.value.agents === 4 && Array.isArray(coerced.value.tools)
+    && coerced.value.tools[0] === 'read' && coerced.value.apply === true,
+    'Pi 1.5 coercion rewrites loose swarm_start args before execute - our validators see typed values');
+  ok(!coerceArgs({ ...goal, agents: '1' }).ok && !coerceArgs({ ...goal, toolkit: 'nope' }).ok,
+    'coercion does not waive the schema: out-of-range agents and a bad toolkit still reject');
+  validateLaunch({ ...launch, agents: coerced.value.agents, tools: coerced.value.tools } as any, s);
+  checks++;
+  assert.throws(() => validateLaunch({ ...launch, agents: '2' } as any, s), /agents must be 2\u2013/);
+  checks++;
+  assert.throws(() => validateLaunch({ ...launch, tools: 'read' } as any, s), /Invalid tools grant list/);
+  checks++;
   ok(commands.includes('swarm'), '/swarm registered');
   await handlers.session_shutdown();
   ok((await runGate('printf pass', root, new AbortController().signal)) === 'pass', 'gate executes locally');

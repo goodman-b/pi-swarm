@@ -66,9 +66,16 @@ const { cli, sdk } = found;
 console.log(`pi SDK ${JSON.parse(readFileSync(join(sdk, 'package.json'), 'utf8')).version} — ${cli}`);
 const req = createRequire(cli);
 const { createJiti } = req('jiti');
+// pi-schema is the 1.5.0 argument validator, imported by the coercion check. It ships an
+// import-only export map, so createRequire (require condition) cannot resolve it; and jiti
+// resolves bare specifiers from THIS file, which has no node_modules - hence the explicit alias.
+const piSchema = resolve(sdk, '../../@earendil-works/pi-schema/dist/index.js');
+if (!existsSync(piSchema)) throw new Error(`Pi 1.5.0+ is required to run these checks: no pi-schema next to ${sdk} `
+  + '(the argument-coercion contract cannot be pinned against an older SDK).');
 const jiti = createJiti(import.meta.url, { alias: {
   '@earendil-works/pi-coding-agent': resolve(sdk, 'dist/index.js'),
   '@earendil-works/pi-tui': req.resolve('@earendil-works/pi-tui'),
+  '@earendil-works/pi-schema': piSchema,
   typebox: req.resolve('typebox'),
 }, moduleCache: false });
 try {
