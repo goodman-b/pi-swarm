@@ -476,6 +476,12 @@ try {
   // half on the local (unsandboxed) path, which works on any host.
   await assert.rejects(() => runGate('false', root, new AbortController().signal)); checks++;
   await assert.rejects(() => runGate('exit 9', root, new AbortController().signal)); checks++;
+  // Same bug, other half: the gate command is a multi-line editor field, so `npm run build` newline
+  // `npm test` is the natural thing to type - and without `set -e` only the last statement decided,
+  // so a gate whose build died mid-script resolved and promote() wrote the staged tree.
+  await assert.rejects(() => runGate('echo built\nfalse\necho done', root, new AbortController().signal)); checks++;
+  ok((await runGate('test -e /nonexistent-xyz || true\nprintf ok', root, new AbortController().signal)) === 'ok',
+    'a gate statement may still opt out of errexit with || true');
 
   // The apply-path seam (real runGate wired into a real SwarmRuntime promote) is NOT covered here.
   // An attempt is kept in projects/swarm notes: on this host the reducer's staged write and the

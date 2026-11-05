@@ -140,7 +140,9 @@ records) gets a sandboxed shell. Extension tools remain outside that sandbox.
 > **Upgrade before using `apply` on a published version.** Up to and including 0.4.2 the
 > gate was **fail-open**: Pi's bash tool resolves (it does not throw) on a non-zero exit, and
 > `runGate()` never inspected that flag — so a failing gate read as a pass and the staged
-> tree was promoted anyway. 0.4.3 throws on any non-zero exit and discards staging. Read-only
+> tree was promoted anyway. 0.4.3 throws on any non-zero exit and discards staging, and 0.4.5
+> closes the other half: the gate runs under `set -eo pipefail`, so **every** statement of a
+> multi-line gate must pass (write `cmd || true` where a step is allowed to fail). Read-only
 > runs never touch the workspace and are not affected. **If you ran `apply: true` on 0.4.2 or
 > earlier:** open the run dir (`~/.pi/swarm-boards/<session>/<run>/`) and look for `gate.txt`.
 > If it is there and ends in `Command exited with code N`, the gate failed and the promoted

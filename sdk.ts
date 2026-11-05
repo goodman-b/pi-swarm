@@ -262,10 +262,14 @@ export async function runGate(command: string, cwd: string, signal: AbortSignal,
     // but NOT on non-zero exit: it resolves with isError:true and the failure text. Without the
     // guard below a failing gate reads as a pass and promote() writes the staged tree over the
     // workspace. (Measured: runGate('false') resolves with "Command exited with code 1".)
+    // `errexit` is the other half: without it only the LAST statement of a multi-statement gate
+    // decides, so 'npm run build\nnpm test' passed over a build that died mid-script - and the
+    // gate editor (commands.ts) is multi-line, so that shape is what people type. A statement
+    // allowed to fail must now say so (`cmd || true`).
     const tool = gateStaging
       ? createBashTool(cwd, { operations: { exec: (cmd, _cwd, opts) => localBash.exec(sandboxArgv(cmd, cwd, gateStaging, true), _cwd, opts) } })
       : createBashTool(cwd);
-    const r = await tool.execute('swarm-gate', { command: 'set -o pipefail\n' + command, timeout: 120 }, signal);
+    const r = await tool.execute('swarm-gate', { command: 'set -eo pipefail\n' + command, timeout: 120 }, signal);
     const out = r.content.filter(x => x.type === 'text').map(x => x.text).join('\n');
     if (r.isError) throw new Error(out);   // non-zero exit: the catch below discards staging
     return out;

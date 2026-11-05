@@ -1,10 +1,24 @@
 # Changelog
 
+## 0.4.5
+
+- **The gate now runs under `set -e`, not only `pipefail`.** A multi-statement gate — `npm run
+  build` newline `npm test`, exactly the shape the `/swarm` gate editor invites — took its result
+  from the **last** statement only, so a build that died mid-script still resolved as a pass and
+  `promote()` wrote the staged tree over the workspace. `runGate()` now prefixes
+  `set -eo pipefail`; a statement allowed to fail must say so (`cmd || true`). Pinned by
+  `runGate('echo built\nfalse\necho done')` rejecting — dropping `errexit` turns the suite red
+  with "Missing expected rejection". Found by a zero-context reviewer pass over the published
+  0.4.4 tree. Checks: 277 + 251 + 91.
+
 ## 0.4.4
 
-> Numbering: 0.4.3 is live on npm and contains the fix below. 0.4.4 is an **identical
-> re-release**, cut while the registry had 0.4.3 parked in its staged-publish limbo
-> (`E409`, nothing listed). Install either; `latest` is 0.4.4.
+Identical re-release of 0.4.3, no code change: cut while the registry held 0.4.3 parked in its
+staged-publish limbo (`E409 Cannot publish over previously staged version`, and `npm stage list`
+showed nothing). Both are installable; notes for both are under **0.4.3** below, because Pi
+matches changelog entries on the `## X.Y.Z` heading.
+
+## 0.4.3
 
 - **SECURITY: the `apply` gate was fail-open in every published release (0.4.0 – 0.4.2).**
   Pi's bash tool *resolves* on a non-zero exit (`isError: true`, text `Command exited with
