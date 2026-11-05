@@ -2,10 +2,9 @@
 
 ## 0.4.4
 
-> Numbering note: 0.4.3 was cut and tagged but never shipped — the npm registry now
-> reserves that version (`E409 Cannot publish over previously staged version`, and staging
-> answers `Cannot stage previously published version`) while it appears in neither the
-> packument nor `npm stage list`. Identical content ships as 0.4.4.
+> Numbering: 0.4.3 is live on npm and contains the fix below. 0.4.4 is an **identical
+> re-release**, cut while the registry had 0.4.3 parked in its staged-publish limbo
+> (`E409`, nothing listed). Install either; `latest` is 0.4.4.
 
 - **SECURITY: the `apply` gate was fail-open in every published release (0.4.0 – 0.4.2).**
   Pi's bash tool *resolves* on a non-zero exit (`isError: true`, text `Command exited with
